@@ -1,0 +1,26 @@
+{
+  "$schema": "https://www.raycast.com/schemas/extension.json",
+  "name": "selected-text-editability-probe",
+  "title": "Selected Text Editability Probe",
+  "description": "Probe whether Raycast exposes a programmatically distinguishable editability signal for selected text.",
+  "icon": "icon.png",
+  "type": "module",
+  "author": "hnishim",
+  "platforms": ["macOS"],
+  "license": "MIT",
+  "commands": [
+    {
+      "name": "probe-editability",
+      "title": "Probe Editability Signal",
+      "description": "Compare selected-text acquisition and same-text paste outcomes without logging content.",
+      "mode": "no-view"
+    }
+  ],
+  "dependencies": {
+    "@raycast/api": "2.4.1"
+  },
+  "scripts": {
+    "build": "ray build",
+    "dev": "ray develop"
+  }
+}
