@@ -32,3 +32,5 @@ for path in sorted(paths, key=lambda item: item.as_posix()):
     source = path.read_text(encoding="utf-8")
     compile(source, str(path), "exec")
 PY
+
+bash tests/test_calc_business_days_namespace.sh
