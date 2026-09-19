@@ -2,7 +2,7 @@
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-RUNTIME_DIR="$HOME/Library/Application Support/com.hnishim.calc-business-days"
+RUNTIME_DIR="$HOME/Library/Application Support/my.script.calc-business-days"
 VENV_DIR="$RUNTIME_DIR/.venv"
 
 if [ -n "${PYTHON_BIN:-}" ]; then

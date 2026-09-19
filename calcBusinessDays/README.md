@@ -55,5 +55,5 @@ cd calcBusinessDays
 - 日付はYYYY-MM-DD形式で入力することを推奨します。
 - 営業日数は1以上の整数で指定してください。
 - 開始日は終了日以前の日付を指定してください。
-- 仮想環境は各Macの `~/Library/Application Support/com.hnishim.calc-business-days` に作成されます。
+- 仮想環境は各Macの `~/Library/Application Support/my.script.calc-business-days` に作成されます。
 - `run.sh` は環境がなければ初回実行時に自動構築します。
