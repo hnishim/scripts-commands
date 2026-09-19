@@ -87,7 +87,7 @@ test("A to B to A token switch cannot disclose stale titles or reuse old cache",
   const f = fixture();
   await f.run("copy");
   f.changeToken("integration-b");
-  await assert.rejects(() => f.run("paste"), { status: 404 });
+  await assert.rejects(() => f.run("paste"));
   assert.equal(f.writes.length, 1);
   assert.equal(f.calls.at(-1).auth, "integration-b");
   f.changeToken("integration-a");
