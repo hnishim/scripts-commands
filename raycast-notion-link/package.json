@@ -1,0 +1,52 @@
+{
+  "name": "raycast-notion-link",
+  "version": "0.1.0",
+  "private": true,
+  "title": "Notion Link",
+  "description": "Notionページのタイトル付きリンクをコピー・貼り付け",
+  "icon": "icon.png",
+  "author": "hnishim",
+  "license": "MIT",
+  "platforms": [
+    "macOS"
+  ],
+  "categories": [
+    "Productivity"
+  ],
+  "commands": [
+    {
+      "name": "paste-notion-link",
+      "title": "Paste Notion Link",
+      "description": "Notionリンクをタイトル付きで貼り付け",
+      "mode": "no-view"
+    },
+    {
+      "name": "copy-notion-link",
+      "title": "Copy Notion Link",
+      "description": "Notionリンクをタイトル付きでコピー",
+      "mode": "no-view"
+    }
+  ],
+  "preferences": [
+    {
+      "name": "notionToken",
+      "title": "Notion Integration Token",
+      "description": "Notionの対象ページに共有済みのInternal Integration Token",
+      "type": "password",
+      "required": true
+    }
+  ],
+  "scripts": {
+    "dev": "ray develop",
+    "build": "ray build",
+    "lint": "ray lint",
+    "test": "node --experimental-strip-types --test tests/*.test.mjs"
+  },
+  "dependencies": {
+    "@raycast/api": "^1.102.0"
+  },
+  "devDependencies": {
+    "@types/node": "^22.0.0",
+    "typescript": "^5.8.0"
+  }
+}
