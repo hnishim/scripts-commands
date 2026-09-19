@@ -34,3 +34,6 @@ for path in sorted(paths, key=lambda item: item.as_posix()):
 PY
 
 bash tests/test_calc_business_days_namespace.sh
+
+# HIR-280: isolated Notion CLI tests use fake ntn/textlint and a temporary HOME.
+python3 -m unittest discover -s tests -p 'test_notion_textlint*.py'
