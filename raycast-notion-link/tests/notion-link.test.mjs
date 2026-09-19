@@ -106,3 +106,98 @@ test("invalid input never invokes API or changes clipboard", async () => {
   assert.equal(f.calls.length, 0);
   assert.equal(f.writes.length, 0);
 });
+
+
+test("last path UUID wins and a UUID in query is not a page ID", () => {
+  const first = "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa";
+  const query = "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb";
+  const originalUrl = "https://www.notion.so/archive/" + first + "/Page-" + uuid + "?source=" + query;
+  assert.deepEqual(parseNotionUrl(originalUrl), { pageId: uuid, originalUrl });
+  assert.throws(() => parseNotionUrl("https://www.notion.so/no-id?source=" + query));
+});
+
+test("all title segments are joined in order and whitespace is normalized", () => {
+  assert.equal(titleFromPage({ properties: { Name: { type: "title", title: [
+    { plain_text: "研究" }, { plain_text: "計画" }, { plain_text: "\n2026  🧪" },
+  ] } } }), "研究計画 2026 🧪");
+});
+
+test("HTML attribute escapes ampersand while fallback preserves original destination", () => {
+  const destination = "https://www.notion.so/Private-" + id + "?first=1&second=2#heading";
+  const result = contentForLink("A & B", destination);
+  assert.equal(result.html, '<a href="https://www.notion.so/Private-' + id + '?first=1&amp;second=2#heading">A &amp; B</a>');
+  assert.equal(result.text, "[A & B](" + destination + ")");
+});
+
+test("error cases notify exact HUD text without an API call on invalid input or clipboard mutation", async () => {
+  const cases = [
+    { input: "", message: "クリップボードが空です" },
+    { input: "https://example.com/no-page", message: "Notion URLがクリップボードにありません" },
+    { input: "https://notion.so/no-page-id", message: "Notion Page IDを取得できません" },
+    { status: 401, message: "Notionトークンを確認してください" },
+    { status: 403, message: "このページをNotion Integrationに共有してください" },
+    { status: 404, message: "このページをNotion Integrationに共有してください" },
+    { status: 429, message: "Notion APIの利用制限中です" },
+    { name: "AbortError", message: "Notion APIがタイムアウトしました" },
+    { status: 500, message: "Notionページ名を取得できませんでした" },
+    { name: "TypeError", message: "Notionページ名を取得できませんでした" },
+  ];
+  for (const check of cases) {
+    const notices = [], writes = [];
+    let apiCalls = 0;
+    await assert.rejects(() => runLinkCommand({
+      mode: "paste", input: check.input ?? url, token: "integration-a", now: () => 100000,
+      cache: { get: () => undefined, set: () => {}, clear: () => {} },
+      getPage: async () => {
+        apiCalls++;
+        throw Object.assign(new Error("safe sentinel"), { status: check.status, name: check.name ?? "Error" });
+      },
+      deliver: async (content) => { writes.push(content); },
+      notify: async (message) => { notices.push(message); },
+    }));
+    assert.deepEqual(notices, [check.message], check.message);
+    assert.equal(writes.length, 0, check.message);
+    assert.equal(apiCalls, check.input === undefined ? 1 : 0, check.message);
+  }
+});
+
+test("interleaved A and B token calls never use A's private title for B", async () => {
+  const store = new Map(), writes = [], notices = [], calls = [];
+  let finishA, token = "integration-a", markStartedA;
+  const startedA = new Promise((resolve) => { markStartedA = resolve; });
+  const cache = { get: (key) => store.get(key), set: (key, val) => store.set(key, val), clear: () => store.clear() };
+  const getPage = (pageId, auth) => {
+    calls.push({ pageId, auth });
+    if (auth === "integration-a") {
+      markStartedA();
+      return new Promise((resolve) => { finishA = resolve; });
+    }
+    return Promise.reject(Object.assign(new Error("private"), { status: 404 }));
+  };
+  const run = (mode) => runLinkCommand({
+    mode, input: url, token, now: () => 100000, cache, getPage,
+    deliver: async (content) => { writes.push({ mode, content }); },
+    notify: async (message) => { notices.push(message); },
+  });
+  const pendingA = run("copy");
+  await startedA;
+  assert.equal(calls.length, 1);
+  assert.equal(calls[0].auth, "integration-a");
+  assert.equal(typeof finishA, "function");
+  token = "integration-b";
+  await assert.rejects(() => run("paste"));
+  assert.equal(writes.length, 0);
+  assert.equal(calls.at(-1).auth, "integration-b");
+  assert.equal(notices.at(-1), "このページをNotion Integrationに共有してください");
+  finishA(page("A private title"));
+  await pendingA;
+  const count = calls.length;
+  await assert.rejects(() => run("paste"));
+  assert.equal(calls.length, count + 1, "B must fetch using B token, not cached A title");
+  assert.equal(calls.at(-1).auth, "integration-b");
+  assert.equal(writes.filter((w) => w.mode === "paste").length, 0);
+  for (const [key, val] of store) {
+    assert.equal(key.includes("integration-a") || key.includes("integration-b"), false);
+    assert.equal(val.includes("integration-a") || val.includes("integration-b"), false);
+  }
+});
