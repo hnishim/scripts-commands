@@ -23,3 +23,13 @@ jobs:
       - uses: actions/checkout@v7
       - name: Run two-pane Finder fixture tests
         run: osascript tests/two-panes-finder_test.applescript
+
+  notion-link-tests:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version: '24'
+      - name: Test Notion link behavior (no credentials or GUI)
+        run: node --experimental-strip-types --test raycast-notion-link/tests/*.test.mjs
