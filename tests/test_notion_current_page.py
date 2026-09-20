@@ -42,7 +42,8 @@ class ScriptCommandTests(unittest.TestCase):
             "swift",
             '#!/bin/sh\n'
             'printf "%s\\n" "$@" > "$HIR11_COPY_LOG"\n'
-            'cat > "$HIR11_PAYLOAD_LOG"\n',
+            'cat > "$HIR11_PAYLOAD_LOG"\n'
+            'exit "${HIR11_COPY_STATUS:-0}"\n',
         )
 
     def _tool(self, name: str, content: str) -> None:
@@ -50,11 +51,19 @@ class ScriptCommandTests(unittest.TestCase):
         target.write_text(content, encoding="utf-8")
         target.chmod(0o755)
 
-    def run_command(self, page: object, source_status: int = 0) -> subprocess.CompletedProcess[str]:
+    def run_command(
+        self,
+        page: object,
+        source_status: int = 0,
+        *,
+        raw_page_json: str | None = None,
+        copy_status: int = 0,
+    ) -> subprocess.CompletedProcess[str]:
         env = os.environ.copy()
         env["PATH"] = str(self.fake_bin) + os.pathsep + env.get("PATH", "")
-        env["HIR11_PAGE_JSON"] = json.dumps(page, ensure_ascii=False)
+        env["HIR11_PAGE_JSON"] = raw_page_json if raw_page_json is not None else json.dumps(page, ensure_ascii=False)
         env["HIR11_SOURCE_STATUS"] = str(source_status)
+        env["HIR11_COPY_STATUS"] = str(copy_status)
         env["HIR11_SOURCE_LOG"] = str(self.source_log)
         env["HIR11_COPY_LOG"] = str(self.copy_log)
         env["HIR11_PAYLOAD_LOG"] = str(self.payload_log)
@@ -86,6 +95,57 @@ class ScriptCommandTests(unittest.TestCase):
         self.assertNotEqual(result.returncode, 0)
         self.assertTrue(self.source_log.is_file(), "The page acquisition boundary was not invoked")
         self.assertFalse(self.copy_log.exists(), "An unavailable page must not change the clipboard")
+
+    def test_successful_source_with_invalid_page_does_not_copy(self) -> None:
+        """A source can exit successfully while returning unusable page data.
+
+        osascript is replaced, and the Swift command is a nonvalidating writer
+        spy. Thus a safe result requires the Script Command to reject the page
+        before reaching --copy; this does not claim real Pasteboard atomicity.
+        """
+        invalid_sources = [
+            ("malformed JSON", "{not-json"),
+            ("non-Notion URL", json.dumps({"title": "Other", "url": "https://example.com/"})),
+            ("missing title", json.dumps({"url": NOTION_URL})),
+            ("empty title", json.dumps({"title": "", "url": NOTION_URL})),
+            ("control character", json.dumps({"title": "Bad" + chr(1) + "Title", "url": NOTION_URL})),
+        ]
+        for description, raw_json in invalid_sources:
+            with self.subTest(source=description):
+                self.source_log.unlink(missing_ok=True)
+                self.copy_log.unlink(missing_ok=True)
+                self.payload_log.unlink(missing_ok=True)
+                result = self.run_command(None, raw_page_json=raw_json)
+                self.assertTrue(self.source_log.is_file(), "The source boundary must be exercised")
+                self.assertNotEqual(result.returncode, 0, "Invalid page data must fail")
+                self.assertFalse(
+                    self.copy_log.exists(),
+                    "Invalid source data must be rejected before invoking the nonvalidating writer",
+                )
+                self.assertFalse(self.payload_log.exists(), "No payload may be passed to the writer")
+                self.assertTrue(
+                    (result.stdout + result.stderr).strip(),
+                    "The command must report a failure to the user",
+                )
+                self.assertNotIn("コピーしました", result.stdout + result.stderr)
+
+    def test_copy_failure_is_not_reported_as_success(self) -> None:
+        """A failing copy boundary must propagate failure, without a success notice.
+
+        This stub writes only to a temporary invocation log and exits nonzero.
+        Real Pasteboard preservation on write failure remains a local test.
+        """
+        page = {"title": "研究概要", "url": NOTION_URL}
+        result = self.run_command(page, copy_status=23)
+        self.assertTrue(self.source_log.is_file(), "The page source must be exercised")
+        self.assertTrue(self.copy_log.is_file(), "The failing copy boundary must be exercised")
+        self.assertNotEqual(result.returncode, 0, "A failed clipboard write must fail the command")
+        self.assertTrue(
+            (result.stdout + result.stderr).strip(),
+            "The command must report a clipboard write failure",
+        )
+        self.assertNotIn("コピーしました", result.stdout + result.stderr)
+        self.assertNotIn("コピー完了", result.stdout + result.stderr)
 
     def test_script_command_has_a_raycast_entry_point(self) -> None:
         source = COMMAND.read_text(encoding="utf-8")
