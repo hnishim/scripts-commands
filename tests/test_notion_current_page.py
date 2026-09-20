@@ -28,11 +28,13 @@ class ScriptCommandTests(unittest.TestCase):
         self.temp_dir = Path(self.tmp.name)
         self.fake_bin = self.temp_dir / "bin"
         self.fake_bin.mkdir()
+        self.source_log = self.temp_dir / "source-invocation"
         self.copy_log = self.temp_dir / "copy-invocation"
         self.payload_log = self.temp_dir / "copy-payload"
         self._tool(
             "osascript",
             '#!/bin/sh\n'
+            'printf "invoked\\n" > "$HIR11_SOURCE_LOG"\n'
             'printf "%s" "$HIR11_PAGE_JSON"\n'
             'exit "${HIR11_SOURCE_STATUS:-0}"\n',
         )
@@ -53,6 +55,7 @@ class ScriptCommandTests(unittest.TestCase):
         env["PATH"] = str(self.fake_bin) + os.pathsep + env.get("PATH", "")
         env["HIR11_PAGE_JSON"] = json.dumps(page, ensure_ascii=False)
         env["HIR11_SOURCE_STATUS"] = str(source_status)
+        env["HIR11_SOURCE_LOG"] = str(self.source_log)
         env["HIR11_COPY_LOG"] = str(self.copy_log)
         env["HIR11_PAYLOAD_LOG"] = str(self.payload_log)
         return subprocess.run(
@@ -69,6 +72,7 @@ class ScriptCommandTests(unittest.TestCase):
         page = {"title": "研究 & <概要> [A]", "url": NOTION_URL}
         result = self.run_command(page)
         self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertTrue(self.source_log.is_file(), "The page acquisition boundary was not invoked")
         self.assertTrue(self.copy_log.is_file(), "Copy helper was not invoked")
         self.assertEqual(self.copy_log.read_text(encoding="utf-8").splitlines()[-1], "--copy")
         self.assertEqual(
@@ -80,6 +84,7 @@ class ScriptCommandTests(unittest.TestCase):
     def test_source_failure_does_not_invoke_clipboard_writer(self) -> None:
         result = self.run_command({"title": "stale", "url": NOTION_URL}, source_status=1)
         self.assertNotEqual(result.returncode, 0)
+        self.assertTrue(self.source_log.is_file(), "The page acquisition boundary was not invoked")
         self.assertFalse(self.copy_log.exists(), "An unavailable page must not change the clipboard")
 
     def test_script_command_has_a_raycast_entry_point(self) -> None:
