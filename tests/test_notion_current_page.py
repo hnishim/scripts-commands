@@ -135,7 +135,7 @@ class PasteboardContentTests(unittest.TestCase):
                 {"title": "No page", "url": "https://www.notion.so/"},
                 {"title": "Missing URL"},
                 {"title": "Missing title", "url": ""},
-                {"title": "Unsafe control", "url": NOTION_URL + "\\nInjected"},
+                {"title": "Unsafe control", "url": NOTION_URL + "\nInjected"},
             ]
             for page in bad_pages:
                 with self.subTest(page=page):
