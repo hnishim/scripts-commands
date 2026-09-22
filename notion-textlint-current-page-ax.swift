@@ -13,17 +13,29 @@ enum AX {
     }
 
     static func stringAttribute(_ element: AXUIElement, _ attribute: CFString) -> String? {
-        copyAttribute(element, attribute) as? String
+        guard let value = copyAttribute(element, attribute) else { return nil }
+        if CFGetTypeID(value) == CFStringGetTypeID() {
+            return value as? String
+        }
+        if CFGetTypeID(value) == CFURLGetTypeID() {
+            return CFURLGetString(value as! CFURL) as String
+        }
+        return nil
     }
 
     static func elementAttribute(_ element: AXUIElement, _ attribute: CFString) -> AXUIElement? {
         guard let value = copyAttribute(element, attribute) else { return nil }
-        return unsafeBitCast(value, to: AXUIElement.self)
+        guard CFGetTypeID(value) == AXUIElementGetTypeID() else { return nil }
+        return value as! AXUIElement
     }
 
     static func elementsAttribute(_ element: AXUIElement, _ attribute: CFString) -> [AXUIElement] {
         guard let values = copyAttribute(element, attribute) as? [Any] else { return [] }
-        return values.map { unsafeBitCast($0, to: AXUIElement.self) }
+        return values.compactMap { value in
+            let cfValue = value as CFTypeRef
+            guard CFGetTypeID(cfValue) == AXUIElementGetTypeID() else { return nil }
+            return cfValue as! AXUIElement
+        }
     }
 }
 
