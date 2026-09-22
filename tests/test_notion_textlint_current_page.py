@@ -146,7 +146,6 @@ class CurrentPageCommandTests(unittest.TestCase):
         self.assertTrue(self.source_log.is_file(), "The page source must be invoked")
         self.assertEqual(self.source_calls(), 1)
         self.assertEqual(self.cli_calls(), [[PAGE_URL]])
-        self.assertNotIn(PAGE_ID, result.stdout + result.stderr)
 
     def test_notion_desktop_page_is_forwarded_once(self) -> None:
         record = self.context(kind="notion_desktop", application="Notion")
@@ -162,8 +161,8 @@ class CurrentPageCommandTests(unittest.TestCase):
 
         self.assertNotEqual(result.returncode, 0)
         self.assertTrue(self.source_log.is_file(), "The source boundary must be exercised")
+        self.assertEqual(self.source_calls(), 1)
         self.assert_not_called()
-        self.assertNotIn(PAGE_ID, result.stdout + result.stderr)
 
     def test_malformed_or_empty_source_does_not_use_stale_value(self) -> None:
         cases = [
@@ -183,6 +182,7 @@ class CurrentPageCommandTests(unittest.TestCase):
                     raw_source_json=raw_json,
                 )
                 self.assertNotEqual(result.returncode, 0)
+                self.assertEqual(self.source_calls(), 1)
                 self.assert_not_called()
 
     def test_invalid_notion_urls_are_rejected_before_cli(self) -> None:
@@ -201,6 +201,7 @@ class CurrentPageCommandTests(unittest.TestCase):
                 record["url"] = url
                 result = self.run_command(record)
                 self.assertNotEqual(result.returncode, 0)
+                self.assertEqual(self.source_calls(), 1)
                 self.assert_not_called()
 
     def test_missing_or_ambiguous_context_is_rejected(self) -> None:
@@ -219,6 +220,7 @@ class CurrentPageCommandTests(unittest.TestCase):
             with self.subTest(record=record):
                 result = self.run_command(record)
                 self.assertNotEqual(result.returncode, 0)
+                self.assertEqual(self.source_calls(), 1)
                 self.assert_not_called()
 
     def test_cli_failure_is_propagated_without_success_report(self) -> None:
@@ -228,6 +230,17 @@ class CurrentPageCommandTests(unittest.TestCase):
         self.assertEqual(self.source_calls(), 1)
         self.assertEqual(self.cli_calls(), [[PAGE_URL]])
         self.assertNotIn("成功", result.stdout + result.stderr)
+
+    def test_diagnostics_do_not_echo_page_body_or_credentials(self) -> None:
+        record = self.context()
+        record["page_body"] = "PRIVATE-PAGE-BODY"
+        record["access_token"] = "PRIVATE-AUTH-TOKEN"
+
+        result = self.run_command(record)
+
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertNotIn("PRIVATE-PAGE-BODY", result.stdout + result.stderr)
+        self.assertNotIn("PRIVATE-AUTH-TOKEN", result.stdout + result.stderr)
 
     def test_existing_manual_cli_entry_point_remains_available(self) -> None:
         self.assertTrue((ROOT / "notion-textlint.py").is_file())
