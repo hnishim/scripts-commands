@@ -60,39 +60,25 @@ func unique(_ values: [String]) -> [String] {
     return result
 }
 
-func accessibilityURL(in window: AXUIElement) throws -> String {
-    var stack: [(AXUIElement, Int)] = [(window, 0)]
+func focusedPageURL(for appElement: AXUIElement) throws -> String {
+    guard var current = AX.elementAttribute(appElement, kAXFocusedUIElementAttribute as CFString) else {
+        throw CaptureError()
+    }
+
     var visited = 0
-    var urls: [String] = []
-
-    while let (element, depth) = stack.popLast(), visited < 800 {
+    while visited < 32 {
+        if AX.stringAttribute(current, kAXRoleAttribute as CFString) == "AXWebArea",
+           let candidate = pageURL(in: AX.stringAttribute(current, kAXURLAttribute as CFString)) {
+            return candidate
+        }
+        guard let parent = AX.elementAttribute(current, kAXParentAttribute as CFString) else {
+            break
+        }
+        current = parent
         visited += 1
-        // AXURL belongs to the active web-area element. Do not descend into
-        // that element after finding it, or page links would become competing
-        // candidates for the currently displayed page.
-        if let candidate = pageURL(in: AX.stringAttribute(element, "AXURL" as CFString)) {
-            urls.append(candidate)
-            continue
-        }
-
-        guard depth < 16 else { continue }
-        for child in AX.elementsAttribute(element, kAXChildrenAttribute as CFString).reversed() {
-            stack.append((child, depth + 1))
-        }
     }
 
-    let candidates = unique(urls)
-    guard candidates.count == 1, let result = candidates.first else { throw CaptureError() }
-    return result
-}
-
-func focusedWindow(for appElement: AXUIElement) throws -> AXUIElement {
-    if let focused = AX.elementAttribute(appElement, kAXFocusedWindowAttribute as CFString) {
-        return focused
-    }
-    let windows = AX.elementsAttribute(appElement, kAXWindowsAttribute as CFString)
-    guard windows.count == 1, let only = windows.first else { throw CaptureError() }
-    return only
+    throw CaptureError()
 }
 
 func supportedBrowser(_ name: String) -> Bool {
@@ -108,8 +94,7 @@ func capture(app: NSRunningApplication) throws -> (String, String, String) {
 
     let pid = app.processIdentifier
     let appElement = AXUIElementCreateApplication(pid)
-    let window = try focusedWindow(for: appElement)
-    let url = try accessibilityURL(in: window)
+    let url = try focusedPageURL(for: appElement)
     let kind = applicationName == "Notion" ? "notion_desktop" : "browser"
     return (applicationName, kind, url)
 }
