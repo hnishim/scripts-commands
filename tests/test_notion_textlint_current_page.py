@@ -137,6 +137,10 @@ class CurrentPageCommandTests(unittest.TestCase):
             return 0
         return self.source_log.read_text(encoding="utf-8").splitlines().count("called")
 
+    def reset_invocation_logs(self) -> None:
+        for path in (self.source_log, self.cli_log, self.clipboard_log):
+            path.unlink(missing_ok=True)
+
     def test_browser_page_is_forwarded_once_without_reconstruction(self) -> None:
         record = self.context()
 
@@ -197,6 +201,7 @@ class CurrentPageCommandTests(unittest.TestCase):
         ]
         for url in invalid_urls:
             with self.subTest(url=url):
+                self.reset_invocation_logs()
                 record = self.context()
                 record["url"] = url
                 result = self.run_command(record)
@@ -218,6 +223,7 @@ class CurrentPageCommandTests(unittest.TestCase):
         ]
         for record in cases:
             with self.subTest(record=record):
+                self.reset_invocation_logs()
                 result = self.run_command(record)
                 self.assertNotEqual(result.returncode, 0)
                 self.assertEqual(self.source_calls(), 1)
