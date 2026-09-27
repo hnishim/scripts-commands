@@ -14,19 +14,15 @@ enum AX {
 
     static func stringAttribute(_ element: AXUIElement, _ attribute: CFString) -> String? {
         guard let value = copyAttribute(element, attribute) else { return nil }
-        if CFGetTypeID(value) == CFStringGetTypeID() {
-            return value as? String
-        }
-        if CFGetTypeID(value) == CFURLGetTypeID() {
-            return CFURLGetString(value as! CFURL) as String
-        }
+        if CFGetTypeID(value) == CFStringGetTypeID() { return value as? String }
+        if CFGetTypeID(value) == CFURLGetTypeID() { return CFURLGetString(value as! CFURL) as String }
         return nil
     }
 
-    static func elementAttribute(_ element: AXUIElement, _ attribute: CFString) -> AXUIElement? {
-        guard let value = copyAttribute(element, attribute) else { return nil }
-        guard CFGetTypeID(value) == AXUIElementGetTypeID() else { return nil }
-        return value as! AXUIElement
+    static func boolAttribute(_ element: AXUIElement, _ attribute: CFString) -> Bool {
+        guard let value = copyAttribute(element, attribute),
+              CFGetTypeID(value) == CFBooleanGetTypeID() else { return false }
+        return CFBooleanGetValue(value as! CFBoolean)
     }
 
     static func elementsAttribute(_ element: AXUIElement, _ attribute: CFString) -> [AXUIElement] {
@@ -51,34 +47,42 @@ func pageURL(in value: String?) -> String? {
     }
 }
 
-func unique(_ values: [String]) -> [String] {
-    var result: [String] = []
-    var seen = Set<String>()
-    for value in values where seen.insert(value).inserted {
-        result.append(value)
+func subtreeFocused(_ element: AXUIElement, depth: Int, visited: inout Int) -> Bool {
+    guard depth <= 80, visited < 12_000 else { return false }
+    visited += 1
+    if AX.boolAttribute(element, kAXFocusedAttribute as CFString) { return true }
+    for child in AX.elementsAttribute(element, kAXChildrenAttribute as CFString) {
+        if subtreeFocused(child, depth: depth + 1, visited: &visited) { return true }
     }
-    return result
+    return false
 }
 
 func focusedPageURL(for appElement: AXUIElement) throws -> String {
-    guard var current = AX.elementAttribute(appElement, kAXFocusedUIElementAttribute as CFString) else {
-        throw CaptureError()
-    }
-
+    var regions: [(url: String, focused: Bool)] = []
     var visited = 0
-    while visited < 32 {
-        if AX.stringAttribute(current, kAXRoleAttribute as CFString) == "AXWebArea",
-           let candidate = pageURL(in: AX.stringAttribute(current, kAXURLAttribute as CFString)) {
-            return candidate
-        }
-        guard let parent = AX.elementAttribute(current, kAXParentAttribute as CFString) else {
-            break
-        }
-        current = parent
+
+    func walk(_ element: AXUIElement, depth: Int) {
+        guard depth <= 80, visited < 12_000 else { return }
         visited += 1
+        let role = AX.stringAttribute(element, kAXRoleAttribute as CFString) ?? ""
+        let roleDescription =
+            (AX.stringAttribute(element, "AXRoleDescription" as CFString) ?? "").lowercased()
+        if role == "AXWebArea" || roleDescription == "html content" {
+            if let candidate = pageURL(in: AX.stringAttribute(element, kAXURLAttribute as CFString)) {
+                var focusVisited = 0
+                regions.append((candidate, subtreeFocused(element, depth: 0, visited: &focusVisited)))
+                return
+            }
+        }
+        for child in AX.elementsAttribute(element, kAXChildrenAttribute as CFString) {
+            walk(child, depth: depth + 1)
+        }
     }
 
-    throw CaptureError()
+    walk(appElement, depth: 0)
+    let focusedRegions = regions.filter { $0.focused }
+    guard focusedRegions.count == 1, let result = focusedRegions.first else { throw CaptureError() }
+    return result.url
 }
 
 func supportedBrowser(_ name: String) -> Bool {
@@ -88,40 +92,25 @@ func supportedBrowser(_ name: String) -> Bool {
 func capture(app: NSRunningApplication) throws -> (String, String, String) {
     guard AXIsProcessTrusted() else { throw CaptureError() }
     guard let applicationName = app.localizedName,
-          applicationName == "Notion" || supportedBrowser(applicationName) else {
-        throw CaptureError()
-    }
-
-    let pid = app.processIdentifier
-    let appElement = AXUIElementCreateApplication(pid)
+          applicationName == "Notion" || supportedBrowser(applicationName) else { throw CaptureError() }
+    let appElement = AXUIElementCreateApplication(app.processIdentifier)
     let url = try focusedPageURL(for: appElement)
     let kind = applicationName == "Notion" ? "notion_desktop" : "browser"
     return (applicationName, kind, url)
 }
 
-func fail() -> Never {
-    exit(1)
-}
+func fail() -> Never { exit(1) }
 
 guard let frontmost = NSWorkspace.shared.frontmostApplication else { fail() }
 do {
     let first = try capture(app: frontmost)
     let second = try capture(app: frontmost)
     guard first.0 == second.0, first.1 == second.1, first.2 == second.2 else { fail() }
-
     let record: [String: Any] = [
-        "context": [
-            "kind": first.1,
-            "application": first.0,
-            "window_id": "pid-\(frontmost.processIdentifier)",
-            "tab_id": "accessibility-active-tab",
-        ],
+        "context": ["kind": first.1, "application": first.0],
         "url": first.2,
     ]
-    let payload: [String: Any] = ["records": [record]]
-    let data = try JSONSerialization.data(withJSONObject: payload, options: [])
+    let data = try JSONSerialization.data(withJSONObject: ["records": [record]], options: [])
     guard let output = String(data: data, encoding: .utf8) else { fail() }
     print(output, terminator: "")
-} catch {
-    fail()
-}
+} catch { fail() }

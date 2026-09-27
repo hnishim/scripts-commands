@@ -24,6 +24,20 @@ def _valid_text(value: object) -> bool:
     )
 
 
+def _normalized_page_ids(value: str) -> list[str]:
+    return [match.replace("-", "").lower() for match in _PAGE_ID.findall(value)]
+
+
+def _canonical_path_page_id(path: str) -> str:
+    segments = [segment for segment in path.split("/") if segment]
+    if not segments:
+        raise ValueError
+    candidates = list(dict.fromkeys(_normalized_page_ids(segments[-1])))
+    if len(candidates) != 1:
+        raise ValueError
+    return candidates[0]
+
+
 def _validate_url(value: object) -> str:
     if not _valid_text(value):
         raise ValueError
@@ -40,7 +54,14 @@ def _validate_url(value: object) -> str:
         raise ValueError from None
     if not parsed.path or parsed.path == "/":
         raise ValueError
-    if len(_PAGE_ID.findall(url)) != 1:
+
+    canonical_page_id = _canonical_path_page_id(parsed.path)
+    full_ids = _normalized_page_ids(url)
+    if not full_ids or full_ids[-1] != canonical_page_id:
+        raise ValueError
+
+    trailing_ids = _normalized_page_ids(parsed.query) + _normalized_page_ids(parsed.fragment)
+    if any(page_id != canonical_page_id for page_id in trailing_ids):
         raise ValueError
     return url
 
@@ -67,9 +88,6 @@ def _extract_url(source_path: str) -> str:
         raise ValueError
     if kind == "notion_desktop" and application != "Notion":
         raise ValueError
-    for key in ("window_id", "tab_id"):
-        if not _valid_text(context.get(key)):
-            raise ValueError
     return _validate_url(record.get("url"))
 
 
