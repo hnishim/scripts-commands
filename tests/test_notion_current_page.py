@@ -94,6 +94,16 @@ sys.exit(int(os.environ.get("FAKE_WRITER_EXIT", "0")))
         self.assertEqual(payload["title"], snapshot["regions"][0]["title"])
         self.assertEqual(payload["url"], URL_APP)
 
+    def test_jxa_url_gate_allows_app_notion_and_retains_allowlist(self) -> None:
+        source = SCRIPT.read_text(encoding="utf-8")
+        start = source.index("function notionURL")
+        end = source.index("\n}", start) + 2
+        gate = source[start:end]
+        self.assertIn("app.notion.com", gate)
+        self.assertIn("notion.so", gate)
+        self.assertIn("www.", gate)
+        self.assertNotIn("example.com", gate)
+
     def test_invalid_or_ambiguous_source_never_invokes_writer(self) -> None:
         cases = [
             "",
