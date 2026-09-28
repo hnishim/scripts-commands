@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import json
 import os
+import shutil
 import stat
 import subprocess
 import tempfile
@@ -95,14 +96,36 @@ sys.exit(int(os.environ.get("FAKE_WRITER_EXIT", "0")))
         self.assertEqual(payload["url"], URL_APP)
 
     def test_jxa_url_gate_allows_app_notion_and_retains_allowlist(self) -> None:
-        source = SCRIPT.read_text(encoding="utf-8")
-        start = source.index("function notionURL")
-        end = source.index("\n}", start) + 2
-        gate = source[start:end]
-        self.assertIn("app.notion.com", gate)
-        self.assertIn("notion.so", gate)
-        self.assertIn("www.", gate)
-        self.assertNotIn("example.com", gate)
+        node = shutil.which("node")
+        self.assertIsNotNone(node, "node is required to execute the JXA URL gate contract")
+        evaluator = r"""
+const fs = require("fs");
+const source = fs.readFileSync(process.argv[1], "utf8");
+const start = source.indexOf("function text");
+const end = source.indexOf("function subtreeFocused", start);
+if (start < 0 || end < 0) process.exit(2);
+eval(source.slice(start, end));
+const cases = [
+  ["https://app.notion.com/p/example/page?source=copy_link", true],
+  ["https://notion.so/example/page", true],
+  ["https://www.notion.so/example/page", true],
+  ["https://example.com/example/page", false],
+  ["https://app.notion.com.evil/example/page", false],
+  ["http://app.notion.com/example/page", false],
+];
+for (const [url, expected] of cases) {
+  if (notionURL(url) !== expected) {
+    console.error(`${url}: expected ${expected}, got ${notionURL(url)}`);
+    process.exit(1);
+  }
+}
+"""
+        result = subprocess.run(
+            [node, "-e", evaluator, str(SCRIPT)],
+            text=True,
+            capture_output=True,
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
 
     def test_invalid_or_ambiguous_source_never_invokes_writer(self) -> None:
         cases = [
