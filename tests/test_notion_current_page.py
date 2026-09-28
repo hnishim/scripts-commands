@@ -17,6 +17,7 @@ SCRIPT = ROOT / "notion-current-page.sh"
 
 URL_MAIN = "https://www.notion.so/0123456789abcdef0123456789abcdef"
 URL_SIDE = "https://www.notion.so/fedcba9876543210fedcba9876543210"
+URL_APP = "https://app.notion.com/p/example/0123456789abcdef0123456789abcdef?source=copy_link"
 
 
 def executable(path: Path, body: str) -> None:
@@ -82,6 +83,16 @@ sys.exit(int(os.environ.get("FAKE_WRITER_EXIT", "0")))
         payload = self.writer_payload()
         self.assertEqual(payload["title"], snapshot["regions"][1]["title"])
         self.assertEqual(payload["url"], snapshot["regions"][1]["url"])
+
+    def test_app_notion_canonical_url_is_forwarded(self) -> None:
+        snapshot = {
+            "regions": [{"title": "Canonical app URL page", "url": URL_APP, "focused": True}]
+        }
+        result = self.run_command(snapshot)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        payload = self.writer_payload()
+        self.assertEqual(payload["title"], snapshot["regions"][0]["title"])
+        self.assertEqual(payload["url"], URL_APP)
 
     def test_invalid_or_ambiguous_source_never_invokes_writer(self) -> None:
         cases = [
