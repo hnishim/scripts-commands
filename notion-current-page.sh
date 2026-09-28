@@ -47,31 +47,6 @@ function subtreeFocused(element, depth) {
     }
     return false;
 }
-function regionTitle(element) {
-    var direct = text(attr(element, "AXTitle"));
-    if (direct) return direct;
-
-    // If the web area itself has no title, accept only one shallowest heading.
-    // Ambiguous headings deliberately produce no title rather than guessing.
-    var headings = [];
-    function visit(node, depth) {
-        if (depth > 30) return;
-        if (text(attr(node, "AXRole")) === "AXHeading") {
-            var value = text(attr(node, "AXValue")) || text(attr(node, "AXTitle"));
-            if (value) headings.push({depth: depth, value: value});
-        }
-        var items = children(node);
-        for (var i = 0; i < items.length; i++) visit(items[i], depth + 1);
-    }
-    visit(element, 0);
-    if (!headings.length) return "";
-    var minDepth = headings.reduce(function(m, h) { return Math.min(m, h.depth); }, headings[0].depth);
-    var values = [];
-    headings.forEach(function(h) {
-        if (h.depth === minDepth && values.indexOf(h.value) < 0) values.push(h.value);
-    });
-    return values.length === 1 ? values[0] : "";
-}
 function run() {
     try {
         var events = Application("System Events");
@@ -80,20 +55,38 @@ function run() {
         var regions = [];
         var visited = 0;
         function walk(element, depth) {
-            if (depth > 80 || visited++ > 12000) return;
+            if (depth > 10 || visited++ > 1000) return;
             var role = text(attr(element, "AXRole"));
             var roleDescription = text(attr(element, "AXRoleDescription")).toLowerCase();
-            var url = text(attr(element, "AXURL"));
-            if ((role === "AXWebArea" || roleDescription === "html content") && notionURL(url)) {
-                regions.push({title: regionTitle(element), url: url, focused: subtreeFocused(element, 0)});
+            if ((role === "AXWebArea" || roleDescription === "html content")
+                    && text(attr(element, "AXTitle")) !== "Tab Bar") {
+                // System Events does not expose AXURL on Notion's web areas.
+                // Keep the element and resolve the URL only after focus is known.
+                regions.push({element: element, title: text(attr(element, "AXTitle"))});
                 return;
             }
             var items = children(element);
             for (var i = 0; i < items.length; i++) walk(items[i], depth + 1);
         }
         var windows = notion.windows();
-        for (var i = 0; i < windows.length; i++) walk(windows[i], 0);
-        return JSON.stringify({regions: regions});
+        if (!windows.length) throw new Error("missing Notion window");
+        walk(windows[windows.length - 1], 0);
+        // Notion mounts the current tab as the last HTML region. Its web area
+        // does not expose AXFocused reliably after keyboard commands, so do not
+        // recursively traverse every page just to infer the active tab.
+        var focused = regions[regions.length - 1];
+        if (!focused || !focused.title) throw new Error("missing current page");
+
+        // Notion exposes the canonical page URL through its built-in Copy link command,
+        // while AXURL is unavailable on the surrounding web area.
+        events.keystroke("l", {using: ["command down"]});
+        delay(0.3);
+        var current = Application.currentApplication();
+        current.includeStandardAdditions = true;
+        var copied = current.doShellScript("/usr/bin/pbpaste");
+        var urls = copied.match(/https:\/\/[^\s)]+/g) || [];
+        if (urls.length !== 1 || !notionURL(urls[0])) throw new Error("invalid copied URL");
+        return JSON.stringify({regions: [{title: focused.title, url: urls[0], focused: true}]});
     } catch (_) {
         throw new Error("Notion page accessibility lookup failed");
     }

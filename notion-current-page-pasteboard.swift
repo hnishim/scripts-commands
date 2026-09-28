@@ -33,6 +33,7 @@ func main() throws {
         throw CopyError.encodingFailed
     }
 
+    NSPasteboard.general.clearContents()
     guard NSPasteboard.general.writeObjects([item]) else {
         throw CopyError.pasteboardWriteFailed
     }
