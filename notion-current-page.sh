@@ -35,7 +35,7 @@ function children(element) {
 }
 function notionURL(value) {
     var raw = text(value);
-    return /^https:\/\/(www\.)?notion\.so\/.+/.test(raw);
+    return /^https:\/\/((www\.)?notion\.so|app\.notion\.com)\/.+/.test(raw);
 }
 function subtreeFocused(element, depth) {
     if (depth > 80) return false;
@@ -128,7 +128,7 @@ try:
     if any(ord(ch) < 32 or ord(ch) == 127 for ch in title + raw_url):
         raise ValueError("control character")
     parsed = urlsplit(raw_url)
-    if (parsed.scheme != "https" or parsed.hostname not in {"notion.so", "www.notion.so"}
+    if (parsed.scheme != "https" or parsed.hostname not in {"notion.so", "www.notion.so", "app.notion.com"}
             or parsed.username is not None or parsed.password is not None
             or not parsed.path or parsed.path == "/" or parsed.fragment):
         raise ValueError("invalid Notion URL")
