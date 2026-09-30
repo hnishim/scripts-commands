@@ -13,7 +13,8 @@ SOURCE="${NOTION_CURRENT_PAGE_SOURCE:-}"
 WRITER="${NOTION_CURRENT_PAGE_WRITER:-}"
 RAW_FILE="$(mktemp)"
 PAYLOAD_FILE="$(mktemp)"
-cleanup() { rm -f "$RAW_FILE" "$PAYLOAD_FILE"; }
+ERROR_FILE="$(mktemp)"
+cleanup() { rm -f "$RAW_FILE" "$PAYLOAD_FILE" "$ERROR_FILE"; }
 trap cleanup EXIT
 
 if [ -n "$SOURCE" ]; then
@@ -22,7 +23,7 @@ if [ -n "$SOURCE" ]; then
     exit 1
   fi
 else
-  if ! osascript -l JavaScript >"$RAW_FILE" 2>/dev/null <<'JXA'
+  if ! osascript -l JavaScript >"$RAW_FILE" 2>"$ERROR_FILE" <<'JXA'
 function attr(element, name) {
     try { return element.attributes.byName(name).value(); } catch (_) { return null; }
 }
@@ -37,10 +38,9 @@ function notionURL(value) {
     var raw = text(value);
     return /^https:\/\/((www\.)?notion\.so|app\.notion\.com)\/.+/.test(raw);
 }
-function subtreeFocused(element) {
-    var visited = 0;
+function subtreeFocused(element, withinBudget) {
     function search(node, depth) {
-        if (depth > 80 || visited++ > 1000) return false;
+        if (depth > 32 || !withinBudget()) return false;
         var focused = attr(node, "AXFocused");
         if (focused === true || focused === 1 || text(focused).toLowerCase() === "true") return true;
         var items = children(node);
@@ -52,14 +52,27 @@ function subtreeFocused(element) {
     return search(element, 0);
 }
 function run() {
+    var stage = "find_notion_process";
+    var searchStarted = Date.now();
+    var visited = 0;
+    var searchTimedOut = false;
+    function withinBudget() {
+        if (Date.now() - searchStarted > 8000 || visited >= 256) {
+            searchTimedOut = true;
+            return false;
+        }
+        visited++;
+        return true;
+    }
     try {
         var events = Application("System Events");
         var notion = events.applicationProcesses.byName("Notion");
+        stage = "check_frontmost";
         if (!notion.exists() || !notion.frontmost()) throw new Error("not frontmost");
         var regions = [];
-        var visited = 0;
+        stage = "discover_page_areas";
         function walk(element, depth) {
-            if (depth > 10 || visited++ > 1000) return;
+        if (depth > 10 || !withinBudget()) return;
             var role = text(attr(element, "AXRole"));
             var roleDescription = text(attr(element, "AXRoleDescription")).toLowerCase();
             if ((role === "AXWebArea" || roleDescription === "html content")
@@ -69,36 +82,79 @@ function run() {
                 regions.push({element: element, title: text(attr(element, "AXTitle"))});
                 return;
             }
-            var items = children(element);
-            for (var i = 0; i < items.length; i++) walk(items[i], depth + 1);
+        var items = children(element);
+        for (var i = 0; i < items.length && !searchTimedOut; i++) walk(items[i], depth + 1);
         }
+        stage = "find_notion_window";
         var windows = notion.windows();
         if (!windows.length) throw new Error("missing Notion window");
+        stage = "discover_page_areas";
         walk(windows[windows.length - 1], 0);
+        if (searchTimedOut) {
+            stage = "accessibility_search_limit";
+            throw new Error("accessibility search limit");
+        }
+        if (!regions.length) {
+            stage = "page_areas_missing";
+            throw new Error("missing page areas");
+        }
+
+        stage = "locate_focused_area";
         var focused = [];
         for (var i = 0; i < regions.length; i++) {
-            if (subtreeFocused(regions[i].element)) focused.push(regions[i]);
+            if (subtreeFocused(regions[i].element, withinBudget)) focused.push(regions[i]);
+            if (searchTimedOut) {
+                stage = "accessibility_search_limit";
+                throw new Error("accessibility search limit");
+            }
         }
-        if (focused.length !== 1 || !focused[0].title) throw new Error("ambiguous current page");
+        if (focused.length !== 1 || !focused[0].title) {
+            stage = "focus_not_unique";
+            throw new Error("ambiguous current page");
+        }
         var active = focused[0];
 
         // Notion exposes the canonical page URL through its built-in Copy link command,
         // while AXURL is unavailable on the surrounding web area.
+        stage = "copy_standard_link";
         events.keystroke("l", {using: ["command down"]});
         delay(0.3);
+        stage = "read_copied_url";
         var current = Application.currentApplication();
         current.includeStandardAdditions = true;
         var copied = current.doShellScript("/usr/bin/pbpaste");
+        stage = "validate_copied_url";
         var urls = copied.match(/https:\/\/[^\s)]+/g) || [];
         if (urls.length !== 1 || !notionURL(urls[0])) throw new Error("invalid copied URL");
         return JSON.stringify({regions: [{title: active.title, url: urls[0], focused: true}]});
     } catch (_) {
-        throw new Error("Notion page accessibility lookup failed");
+        throw new Error("HIR11_STAGE:" + stage);
     }
 }
 JXA
   then
-    echo "現在表示しているNotionページを取得できませんでした。"
+    FAILURE_STAGE="$(/usr/bin/python3 - "$ERROR_FILE" <<'PY'
+import pathlib
+import re
+import sys
+
+error_text = pathlib.Path(sys.argv[1]).read_text(encoding="utf-8", errors="replace")
+match = re.search(r"HIR11_STAGE:([a-z_]+)", error_text)
+print(match.group(1) if match else "unknown")
+PY
+)"
+    case "$FAILURE_STAGE" in
+      check_frontmost) echo "Notionが最前面ではないため、処理を中止しました。" ;;
+      find_notion_process) echo "Notionアプリを特定できませんでした。" ;;
+      find_notion_window) echo "Notionのウィンドウを特定できませんでした。" ;;
+      page_areas_missing) echo "Notionのページ領域を特定できませんでした。" ;;
+      accessibility_search_limit) echo "Notionのページ探索が時間または要素数の上限に達したため停止しました。" ;;
+      focus_not_unique) echo "Notionの現在ページを一意に特定できませんでした。" ;;
+      locate_focused_area) echo "Notionのフォーカス領域を確認できませんでした。" ;;
+      copy_standard_link) echo "Notionの標準リンクコピーを実行できませんでした。" ;;
+      read_copied_url|validate_copied_url) echo "Notionの標準リンクURLを確認できませんでした。" ;;
+      *) echo "Notionページ情報の取得に失敗しました（詳細不明）。" ;;
+    esac
     exit 1
   fi
 fi
