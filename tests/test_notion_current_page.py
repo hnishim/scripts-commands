@@ -97,9 +97,10 @@ const window = element({
   })),
 });
 const notion = { exists: () => true, frontmost: () => true, windows: () => [window] };
+const audit = { keystrokeCalls: 0, clipboardReads: 0 };
 const events = {
   applicationProcesses: { byName: () => notion },
-  keystroke() {},
+  keystroke() { audit.keystrokeCalls++; },
 };
 function Application(name) {
   if (name !== "System Events") throw new Error("unexpected application");
@@ -107,13 +108,14 @@ function Application(name) {
 }
 Application.currentApplication = () => ({
   includeStandardAdditions: false,
-  doShellScript: () => input.clipboardUrl,
+  doShellScript() { audit.clipboardReads++; return input.clipboardUrl; },
 });
 globalThis.Application = Application;
 globalThis.delay = () => {};
 try {
-  process.stdout.write(eval(input.jxa + "\nrun();"));
+  process.stdout.write(JSON.stringify({ result: eval(input.jxa + "\nrun();"), audit }));
 } catch (error) {
+  process.stdout.write(JSON.stringify({ result: null, audit }));
   process.stderr.write(String(error.message || error));
   process.exitCode = 1;
 }
@@ -160,11 +162,36 @@ try {
         ]
         result = self.run_jxa_regions(regions, URL_SIDE)
         self.assertEqual(result.returncode, 0, result.stderr)
-        payload = json.loads(result.stdout)
+        trace = json.loads(result.stdout)
+        payload = json.loads(trace["result"])
         self.assertEqual(
             payload["regions"],
             [{"title": "Right Side Peek page", "url": URL_SIDE, "focused": True}],
         )
+        self.assertEqual(trace["audit"], {"keystrokeCalls": 1, "clipboardReads": 1})
+
+    def test_jxa_selects_main_page_when_side_peek_region_is_last(self) -> None:
+        regions = [
+            {
+                "title": "Left database page",
+                "children": [
+                    {
+                        "attrs": {"AXRole": "AXGroup"},
+                        "children": [{"attrs": {"AXRole": "AXTextField", "AXFocused": True}}],
+                    }
+                ],
+            },
+            {"title": "Right Side Peek page", "children": []},
+        ]
+        result = self.run_jxa_regions(regions, URL_MAIN)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        trace = json.loads(result.stdout)
+        payload = json.loads(trace["result"])
+        self.assertEqual(
+            payload["regions"],
+            [{"title": "Left database page", "url": URL_MAIN, "focused": True}],
+        )
+        self.assertEqual(trace["audit"], {"keystrokeCalls": 1, "clipboardReads": 1})
 
     def test_jxa_refuses_zero_or_multiple_focused_page_regions(self) -> None:
         cases = [
@@ -187,6 +214,8 @@ try {
             with self.subTest(regions=regions):
                 result = self.run_jxa_regions(regions, URL_SIDE)
                 self.assertNotEqual(result.returncode, 0)
+                trace = json.loads(result.stdout)
+                self.assertEqual(trace["audit"], {"keystrokeCalls": 0, "clipboardReads": 0})
 
     def test_app_notion_canonical_url_is_forwarded(self) -> None:
         snapshot = {
