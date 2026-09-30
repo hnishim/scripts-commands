@@ -37,15 +37,19 @@ function notionURL(value) {
     var raw = text(value);
     return /^https:\/\/((www\.)?notion\.so|app\.notion\.com)\/.+/.test(raw);
 }
-function subtreeFocused(element, depth) {
-    if (depth > 80) return false;
-    var focused = attr(element, "AXFocused");
-    if (focused === true || focused === 1) return true;
-    var items = children(element);
-    for (var i = 0; i < items.length; i++) {
-        if (subtreeFocused(items[i], depth + 1)) return true;
+function subtreeFocused(element) {
+    var visited = 0;
+    function search(node, depth) {
+        if (depth > 80 || visited++ > 1000) return false;
+        var focused = attr(node, "AXFocused");
+        if (focused === true || focused === 1 || text(focused).toLowerCase() === "true") return true;
+        var items = children(node);
+        for (var i = 0; i < items.length; i++) {
+            if (search(items[i], depth + 1)) return true;
+        }
+        return false;
     }
-    return false;
+    return search(element, 0);
 }
 function run() {
     try {
@@ -71,11 +75,12 @@ function run() {
         var windows = notion.windows();
         if (!windows.length) throw new Error("missing Notion window");
         walk(windows[windows.length - 1], 0);
-        // Notion mounts the current tab as the last HTML region. Its web area
-        // does not expose AXFocused reliably after keyboard commands, so do not
-        // recursively traverse every page just to infer the active tab.
-        var focused = regions[regions.length - 1];
-        if (!focused || !focused.title) throw new Error("missing current page");
+        var focused = [];
+        for (var i = 0; i < regions.length; i++) {
+            if (subtreeFocused(regions[i].element)) focused.push(regions[i]);
+        }
+        if (focused.length !== 1 || !focused[0].title) throw new Error("ambiguous current page");
+        var active = focused[0];
 
         // Notion exposes the canonical page URL through its built-in Copy link command,
         // while AXURL is unavailable on the surrounding web area.
@@ -86,7 +91,7 @@ function run() {
         var copied = current.doShellScript("/usr/bin/pbpaste");
         var urls = copied.match(/https:\/\/[^\s)]+/g) || [];
         if (urls.length !== 1 || !notionURL(urls[0])) throw new Error("invalid copied URL");
-        return JSON.stringify({regions: [{title: focused.title, url: urls[0], focused: true}]});
+        return JSON.stringify({regions: [{title: active.title, url: urls[0], focused: true}]});
     } catch (_) {
         throw new Error("Notion page accessibility lookup failed");
     }
