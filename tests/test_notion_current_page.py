@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import shutil
 import stat
 import subprocess
@@ -67,6 +68,65 @@ sys.exit(int(os.environ.get("FAKE_WRITER_EXIT", "0")))
     def writer_payload(self) -> dict:
         return json.loads(self.writer_log.read_text(encoding="utf-8"))
 
+    def run_jxa_regions(
+        self, regions: list[dict], clipboard_url: str
+    ) -> subprocess.CompletedProcess[str]:
+        node = shutil.which("node")
+        self.assertIsNotNone(node, "node is required to execute the JXA region-selection contract")
+        source = SCRIPT.read_text(encoding="utf-8")
+        match = re.search(r"<<'JXA'\n(.*?)\nJXA\n", source, re.DOTALL)
+        self.assertIsNotNone(match, "the script must keep its JXA source in the checked heredoc")
+        harness = r"""
+const fs = require("fs");
+const input = JSON.parse(fs.readFileSync(0, "utf8"));
+function element(spec) {
+  return {
+    attributes: {
+      byName(name) {
+        return { value: () => Object.hasOwn(spec.attrs || {}, name) ? spec.attrs[name] : null };
+      },
+    },
+    uiElements() { return (spec.children || []).map(element); },
+  };
+}
+const window = element({
+  attrs: { AXRole: "AXWindow" },
+  children: input.regions.map((region) => ({
+    attrs: { AXRole: "AXWebArea", AXTitle: region.title, AXRoleDescription: "html content" },
+    children: region.children || [],
+  })),
+});
+const notion = { exists: () => true, frontmost: () => true, windows: () => [window] };
+const events = {
+  applicationProcesses: { byName: () => notion },
+  keystroke() {},
+};
+function Application(name) {
+  if (name !== "System Events") throw new Error("unexpected application");
+  return events;
+}
+Application.currentApplication = () => ({
+  includeStandardAdditions: false,
+  doShellScript: () => input.clipboardUrl,
+});
+globalThis.Application = Application;
+globalThis.delay = () => {};
+try {
+  process.stdout.write(eval(input.jxa + "\nrun();"));
+} catch (error) {
+  process.stderr.write(String(error.message || error));
+  process.exitCode = 1;
+}
+"""
+        return subprocess.run(
+            [node, "-e", harness],
+            input=json.dumps(
+                {"jxa": match.group(1), "regions": regions, "clipboardUrl": clipboard_url}
+            ),
+            text=True,
+            capture_output=True,
+        )
+
     def test_raycast_script_command_entry_point_exists(self) -> None:
         text = SCRIPT.read_text(encoding="utf-8")
         self.assertIn("# @raycast.schemaVersion", text)
@@ -84,6 +144,49 @@ sys.exit(int(os.environ.get("FAKE_WRITER_EXIT", "0")))
         payload = self.writer_payload()
         self.assertEqual(payload["title"], snapshot["regions"][1]["title"])
         self.assertEqual(payload["url"], snapshot["regions"][1]["url"])
+
+    def test_jxa_selects_side_peek_region_matching_active_page_url(self) -> None:
+        regions = [
+            {
+                "title": "Right Side Peek page",
+                "children": [
+                    {
+                        "attrs": {"AXRole": "AXGroup"},
+                        "children": [{"attrs": {"AXRole": "AXTextField", "AXFocused": True}}],
+                    }
+                ],
+            },
+            {"title": "Left database page", "children": []},
+        ]
+        result = self.run_jxa_regions(regions, URL_SIDE)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        payload = json.loads(result.stdout)
+        self.assertEqual(
+            payload["regions"],
+            [{"title": "Right Side Peek page", "url": URL_SIDE, "focused": True}],
+        )
+
+    def test_jxa_refuses_zero_or_multiple_focused_page_regions(self) -> None:
+        cases = [
+            [
+                {"title": "Right Side Peek page", "children": []},
+                {"title": "Left database page", "children": []},
+            ],
+            [
+                {
+                    "title": "Right Side Peek page",
+                    "children": [{"attrs": {"AXFocused": True}}],
+                },
+                {
+                    "title": "Left database page",
+                    "children": [{"attrs": {"AXFocused": True}}],
+                },
+            ],
+        ]
+        for regions in cases:
+            with self.subTest(regions=regions):
+                result = self.run_jxa_regions(regions, URL_SIDE)
+                self.assertNotEqual(result.returncode, 0)
 
     def test_app_notion_canonical_url_is_forwarded(self) -> None:
         snapshot = {
