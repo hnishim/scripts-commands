@@ -51,6 +51,23 @@ function subtreeFocused(element, withinBudget) {
     }
     return search(element, 0);
 }
+function focusedPageArea(focusedElement, withinBudget) {
+    var node = focusedElement;
+    var pageArea = null;
+    for (var depth = 0; node && depth < 64; depth++) {
+        if (!withinBudget()) return null;
+        var role = text(attr(node, "AXRole"));
+        var roleDescription = text(attr(node, "AXRoleDescription")).toLowerCase();
+        if ((role === "AXWebArea" || roleDescription === "html content")
+                && text(attr(node, "AXTitle")) !== "Tab Bar") {
+            if (pageArea) return null;
+            pageArea = {element: node, title: text(attr(node, "AXTitle"))};
+        }
+        if (role === "AXWindow") return pageArea;
+        node = attr(node, "AXParent");
+    }
+    return null;
+}
 function run() {
     var stage = "find_notion_process";
     var searchStarted = Date.now();
@@ -69,50 +86,73 @@ function run() {
         var notion = events.applicationProcesses.byName("Notion");
         stage = "check_frontmost";
         if (!notion.exists() || !notion.frontmost()) throw new Error("not frontmost");
-        var regions = [];
-        stage = "discover_page_areas";
-        function walk(element, depth) {
-        if (depth > 10 || !withinBudget()) return;
-            var role = text(attr(element, "AXRole"));
-            var roleDescription = text(attr(element, "AXRoleDescription")).toLowerCase();
-            if ((role === "AXWebArea" || roleDescription === "html content")
-                    && text(attr(element, "AXTitle")) !== "Tab Bar") {
-                // System Events does not expose AXURL on Notion's web areas.
-                // Keep the element and resolve the URL only after focus is known.
-                regions.push({element: element, title: text(attr(element, "AXTitle"))});
-                return;
+        var active = null;
+        var supportsFocusedElement = false;
+        try {
+            supportsFocusedElement = typeof notion.attributes.byName === "function";
+        } catch (_) {}
+        if (supportsFocusedElement) {
+            stage = "locate_focused_area";
+            var focusedElement = attr(notion, "AXFocusedUIElement");
+            if (!focusedElement) {
+                stage = "focused_element_missing";
+                throw new Error("missing focused element");
             }
-        var items = children(element);
-        for (var i = 0; i < items.length && !searchTimedOut; i++) walk(items[i], depth + 1);
-        }
-        stage = "find_notion_window";
-        var windows = notion.windows();
-        if (!windows.length) throw new Error("missing Notion window");
-        stage = "discover_page_areas";
-        walk(windows[windows.length - 1], 0);
-        if (searchTimedOut) {
-            stage = "accessibility_search_limit";
-            throw new Error("accessibility search limit");
-        }
-        if (!regions.length) {
-            stage = "page_areas_missing";
-            throw new Error("missing page areas");
-        }
-
-        stage = "locate_focused_area";
-        var focused = [];
-        for (var i = 0; i < regions.length; i++) {
-            if (subtreeFocused(regions[i].element, withinBudget)) focused.push(regions[i]);
+            active = focusedPageArea(focusedElement, withinBudget);
             if (searchTimedOut) {
                 stage = "accessibility_search_limit";
                 throw new Error("accessibility search limit");
             }
+            if (!active || !active.title) {
+                stage = "focus_not_unique";
+                throw new Error("focused element is not in one titled page area");
+            }
+        } else {
+            // Compatibility path for script hosts without the application-level AX attribute.
+            var regions = [];
+            stage = "discover_page_areas";
+            function walk(element, depth) {
+                if (depth > 10 || !withinBudget()) return;
+                var role = text(attr(element, "AXRole"));
+                var roleDescription = text(attr(element, "AXRoleDescription")).toLowerCase();
+                if ((role === "AXWebArea" || roleDescription === "html content")
+                        && text(attr(element, "AXTitle")) !== "Tab Bar") {
+                    // System Events does not expose AXURL on Notion's web areas.
+                    regions.push({element: element, title: text(attr(element, "AXTitle"))});
+                    return;
+                }
+                var items = children(element);
+                for (var i = 0; i < items.length && !searchTimedOut; i++) walk(items[i], depth + 1);
+            }
+            stage = "find_notion_window";
+            var windows = notion.windows();
+            if (!windows.length) throw new Error("missing Notion window");
+            stage = "discover_page_areas";
+            walk(windows[windows.length - 1], 0);
+            if (searchTimedOut) {
+                stage = "accessibility_search_limit";
+                throw new Error("accessibility search limit");
+            }
+            if (!regions.length) {
+                stage = "page_areas_missing";
+                throw new Error("missing page areas");
+            }
+
+            stage = "locate_focused_area";
+            var focused = [];
+            for (var i = 0; i < regions.length; i++) {
+                if (subtreeFocused(regions[i].element, withinBudget)) focused.push(regions[i]);
+                if (searchTimedOut) {
+                    stage = "accessibility_search_limit";
+                    throw new Error("accessibility search limit");
+                }
+            }
+            if (focused.length !== 1 || !focused[0].title) {
+                stage = "focus_not_unique";
+                throw new Error("ambiguous current page");
+            }
+            active = focused[0];
         }
-        if (focused.length !== 1 || !focused[0].title) {
-            stage = "focus_not_unique";
-            throw new Error("ambiguous current page");
-        }
-        var active = focused[0];
 
         // Notion exposes the canonical page URL through its built-in Copy link command,
         // while AXURL is unavailable on the surrounding web area.
@@ -149,6 +189,7 @@ PY
       find_notion_window) echo "Notionのウィンドウを特定できませんでした。" ;;
       page_areas_missing) echo "Notionのページ領域を特定できませんでした。" ;;
       accessibility_search_limit) echo "Notionのページ探索が時間または要素数の上限に達したため停止しました。" ;;
+      focused_element_missing) echo "Notionのフォーカス中のUI要素を取得できませんでした。" ;;
       focus_not_unique) echo "Notionの現在ページを一意に特定できませんでした。" ;;
       locate_focused_area) echo "Notionのフォーカス領域を確認できませんでした。" ;;
       copy_standard_link) echo "Notionの標準リンクコピーを実行できませんでした。" ;;
