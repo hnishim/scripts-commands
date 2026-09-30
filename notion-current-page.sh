@@ -18,7 +18,7 @@ trap cleanup EXIT
 
 if [ -n "$SOURCE" ]; then
   if ! "$SOURCE" >"$RAW_FILE"; then
-    echo "現在表示しているNotionページを取得できませんでした。" >&2
+    echo "現在表示しているNotionページを取得できませんでした。"
     exit 1
   fi
 else
@@ -98,7 +98,7 @@ function run() {
 }
 JXA
   then
-    echo "現在表示しているNotionページを取得できませんでした。" >&2
+    echo "現在表示しているNotionページを取得できませんでした。"
     exit 1
   fi
 fi
@@ -145,18 +145,18 @@ except (OSError, ValueError, TypeError, KeyError, json.JSONDecodeError):
     sys.exit(1)
 PY
 then
-  echo "ページ情報を安全に特定できないため、クリップボードは変更していません。" >&2
+  echo "ページ情報を安全に特定できないため、クリップボードは変更していません。"
   exit 1
 fi
 
 if [ -n "$WRITER" ]; then
   if ! "$WRITER" <"$PAYLOAD_FILE"; then
-    echo "タイトル付きリンクをクリップボードに保存できませんでした。" >&2
+    echo "タイトル付きリンクをクリップボードに保存できませんでした。"
     exit 1
   fi
 else
   if ! swift "$SCRIPT_DIR/notion-current-page-pasteboard.swift" <"$PAYLOAD_FILE" >/dev/null 2>/dev/null; then
-    echo "タイトル付きリンクをクリップボードに保存できませんでした。" >&2
+    echo "タイトル付きリンクをクリップボードに保存できませんでした。"
     exit 1
   fi
 fi
