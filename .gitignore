@@ -12,6 +12,7 @@ dist/
 build/
 **/build/
 *.log
+.playwright-mcp/
 
 .env
 .env.*
