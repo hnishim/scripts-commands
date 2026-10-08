@@ -53,9 +53,20 @@ PY
       notion_not_frontmost) echo "Notionが最前面ではないため、処理を中止しました。" ;;
       notion_process_unavailable) echo "Notionアプリを特定できませんでした。" ;;
       focused_element_missing) echo "Notionのフォーカス中のUI要素を取得できませんでした。" ;;
-      accessibility_timeout|page_area_depth_limit) echo "Notionの現在ページを確認できませんでした（探索上限）。" ;;
+      accessibility_read_failed) echo "Notionのアクセシビリティ情報を取得できませんでした。" ;;
+      accessibility_timeout) echo "Notionの画面情報を制限時間内に取得できませんでした。" ;;
+      page_area_depth_limit) echo "Notionのページ領域を一意にたどれませんでした。" ;;
+      side_peek_scope_search_limit) echo "Side Peekの表示領域を探索上限内に確認できませんでした。" ;;
+      side_peek_page_search_limit) echo "Side Peek内の子ページを探索上限内に確認できませんでした。" ;;
+      page_link_search_limit) echo "Side Peek内の子ページリンクを探索上限内に確認できませんでした。" ;;
+      side_peek_scope_ambiguous) echo "NotionでSide Peekの表示領域が複数見つかったため、処理を中止しました。" ;;
+      side_peek_page_ambiguous) echo "Side Peek内で複数の子ページが見つかったため、処理を中止しました。" ;;
+      page_link_ambiguous) echo "Side Peek内で子ページリンクが複数見つかったため、処理を中止しました。" ;;
+      side_peek_page_missing) echo "Side Peek内の子ページを特定できないため、処理を中止しました。" ;;
+      page_link_missing) echo "Side Peek内の子ページリンクを特定できないため、処理を中止しました。" ;;
+      notion_window_unavailable) echo "Notionのウィンドウを特定できませんでした。" ;;
       page_pair_missing) echo "同一ページ領域のタイトルとURLを取得できないため、処理を中止しました。" ;;
-      *) echo "Notionの現在ページを安全に特定できませんでした。" ;;
+      *) echo "Notionの現在ページを安全に特定できませんでした（識別子: ${FAILURE_STAGE}）。" ;;
     esac
     exit 1
   fi

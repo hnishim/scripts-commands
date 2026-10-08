@@ -97,6 +97,20 @@ static BOOL IsSidePeekScope(AXUIElementRef element) {
     return NO;
 }
 
+static BOOL IsLeafAccessibilityRole(CFStringRef role) {
+    if (!role) return NO;
+    const CFStringRef leafRoles[] = {
+        CFSTR("AXButton"), CFSTR("AXCheckBox"), CFSTR("AXImage"),
+        CFSTR("AXLink"), CFSTR("AXMenuItem"), CFSTR("AXMenuBarItem"),
+        CFSTR("AXRadioButton"), CFSTR("AXStaticText"), CFSTR("AXTextArea"),
+        CFSTR("AXTextField")
+    };
+    for (NSUInteger i = 0; i < sizeof(leafRoles) / sizeof(leafRoles[0]); i++) {
+        if (CFEqual(role, leafRoles[i])) return YES;
+    }
+    return NO;
+}
+
 static BOOL CopyFullPageLink(AXUIElementRef element,
                              CFStringRef *labelOut,
                              CFStringRef *urlOut) {
@@ -236,45 +250,69 @@ static BOOL WalkForSidePeekScopes(AXUIElementRef element,
                                   NSUInteger depth,
                                   NSUInteger *visited,
                                   NSMutableArray *matches) {
-    if (CFAbsoluteTimeGetCurrent() >= gDeadline) {
-        gFailureStage = "accessibility_timeout";
-        return NO;
-    }
-    if (depth > 32 || ++(*visited) > 512) {
-        gFailureStage = "side_peek_scope_search_limit";
-        return NO;
-    }
-    if (IsSidePeekScope(element)) {
-        [matches addObject:CFBridgingRelease(CFRetain(element))];
-        return YES;
-    }
-
-    // Side Peekはタイトル付きAXWebAreaの子孫として現れる場合があるため探索を続ける。
-
-    CFTypeRef childrenValue = CopyAttribute(element, kAXChildrenAttribute);
-    if (gFailureStage && strcmp(gFailureStage, "accessibility_timeout") == 0) return NO;
-    if (!childrenValue) return YES;
-    if (CFGetTypeID(childrenValue) != CFArrayGetTypeID()) {
-        CFRelease(childrenValue);
-        return YES;
-    }
-
-    CFArrayRef children = (CFArrayRef)childrenValue;
-    CFIndex childCount = CFArrayGetCount(children);
-    if (childCount > 512) {
-        CFRelease(childrenValue);
-        gFailureStage = "side_peek_scope_search_limit";
-        return NO;
-    }
-    for (CFIndex i = 0; i < childCount; i++) {
-        CFTypeRef childValue = CFArrayGetValueAtIndex(children, i);
-        if (!childValue || CFGetTypeID(childValue) != AXUIElementGetTypeID()) continue;
-        if (!WalkForSidePeekScopes((AXUIElementRef)childValue, depth + 1, visited, matches)) {
-            CFRelease(childrenValue);
+    NSMutableArray *pending = [NSMutableArray arrayWithObject:@{
+        @"element": CFBridgingRelease(CFRetain(element)), @"depth": @(depth)
+    }];
+    NSUInteger next = 0;
+    NSUInteger scheduled = 1;
+    while (next < pending.count) {
+        if (CFAbsoluteTimeGetCurrent() >= gDeadline) {
+            gFailureStage = "accessibility_timeout";
             return NO;
         }
+        NSDictionary *entry = pending[next++];
+        AXUIElementRef current = (__bridge AXUIElementRef)entry[@"element"];
+        NSUInteger currentDepth = [entry[@"depth"] unsignedIntegerValue];
+        if (currentDepth > 32 || ++(*visited) > 2048) {
+            gFailureStage = "side_peek_scope_search_limit";
+            return NO;
+        }
+
+        CFStringRef role = CopyStringAttribute(current, kAXRoleAttribute);
+        if (gFailureStage && strcmp(gFailureStage, "accessibility_timeout") == 0) {
+            if (role) CFRelease(role);
+            return NO;
+        }
+        BOOL isLeaf = IsLeafAccessibilityRole(role);
+        if (!isLeaf && IsSidePeekScope(current)) {
+            [matches addObject:CFBridgingRelease(CFRetain(current))];
+            if (role) CFRelease(role);
+            continue;
+        }
+        if (role) CFRelease(role);
+        if (isLeaf) continue;
+
+        CFTypeRef childrenValue = CopyAttribute(current, kAXChildrenAttribute);
+        if (gFailureStage && strcmp(gFailureStage, "accessibility_timeout") == 0) return NO;
+        if (!childrenValue) continue;
+        if (CFGetTypeID(childrenValue) != CFArrayGetTypeID()) {
+            CFRelease(childrenValue);
+            continue;
+        }
+
+        CFArrayRef children = (CFArrayRef)childrenValue;
+        CFIndex childCount = CFArrayGetCount(children);
+        if (childCount > 512) {
+            CFRelease(childrenValue);
+            gFailureStage = "side_peek_scope_search_limit";
+            return NO;
+        }
+        for (CFIndex i = 0; i < childCount; i++) {
+            CFTypeRef childValue = CFArrayGetValueAtIndex(children, i);
+            if (!childValue || CFGetTypeID(childValue) != AXUIElementGetTypeID()) continue;
+            if (scheduled >= 2048) {
+                CFRelease(childrenValue);
+                gFailureStage = "side_peek_scope_search_limit";
+                return NO;
+            }
+            [pending addObject:@{
+                @"element": CFBridgingRelease(CFRetain((AXUIElementRef)childValue)),
+                @"depth": @(currentDepth + 1)
+            }];
+            scheduled++;
+        }
+        CFRelease(childrenValue);
     }
-    CFRelease(childrenValue);
     return YES;
 }
 
@@ -283,50 +321,71 @@ static BOOL WalkForSidePeekPageAreas(AXUIElementRef sidePeekScope,
                                      NSUInteger depth,
                                      NSUInteger *visited,
                                      NSMutableArray *pageAreas) {
-    if (CFAbsoluteTimeGetCurrent() >= gDeadline) {
-        gFailureStage = "accessibility_timeout";
-        return NO;
-    }
-    if (depth > 32 || ++(*visited) > 512) {
-        gFailureStage = "side_peek_page_search_limit";
-        return NO;
-    }
-
-    if (!CFEqual(element, sidePeekScope)) {
-        CFStringRef role = CopyStringAttribute(element, kAXRoleAttribute);
-        BOOL isPageArea = role && CFEqual(role, CFSTR("AXWebArea"));
-        if (role) CFRelease(role);
-        if (isPageArea) {
-            [pageAreas addObject:CFBridgingRelease(CFRetain(element))];
-            return YES;
-        }
-    }
-
-    CFTypeRef childrenValue = CopyAttribute(element, kAXChildrenAttribute);
-    if (gFailureStage && strcmp(gFailureStage, "accessibility_timeout") == 0) return NO;
-    if (!childrenValue) return YES;
-    if (CFGetTypeID(childrenValue) != CFArrayGetTypeID()) {
-        CFRelease(childrenValue);
-        return YES;
-    }
-
-    CFArrayRef children = (CFArrayRef)childrenValue;
-    CFIndex childCount = CFArrayGetCount(children);
-    if (childCount > 512) {
-        CFRelease(childrenValue);
-        gFailureStage = "side_peek_page_search_limit";
-        return NO;
-    }
-    for (CFIndex i = 0; i < childCount; i++) {
-        CFTypeRef childValue = CFArrayGetValueAtIndex(children, i);
-        if (!childValue || CFGetTypeID(childValue) != AXUIElementGetTypeID()) continue;
-        if (!WalkForSidePeekPageAreas(sidePeekScope, (AXUIElementRef)childValue,
-                                      depth + 1, visited, pageAreas)) {
-            CFRelease(childrenValue);
+    NSMutableArray *pending = [NSMutableArray arrayWithObject:@{
+        @"element": CFBridgingRelease(CFRetain(element)), @"depth": @(depth)
+    }];
+    NSUInteger next = 0;
+    NSUInteger scheduled = 1;
+    while (next < pending.count) {
+        if (CFAbsoluteTimeGetCurrent() >= gDeadline) {
+            gFailureStage = "accessibility_timeout";
             return NO;
         }
+        NSDictionary *entry = pending[next++];
+        AXUIElementRef current = (__bridge AXUIElementRef)entry[@"element"];
+        NSUInteger currentDepth = [entry[@"depth"] unsignedIntegerValue];
+        if (currentDepth > 32 || ++(*visited) > 2048) {
+            gFailureStage = "side_peek_page_search_limit";
+            return NO;
+        }
+
+        CFStringRef role = CopyStringAttribute(current, kAXRoleAttribute);
+        if (gFailureStage && strcmp(gFailureStage, "accessibility_timeout") == 0) {
+            if (role) CFRelease(role);
+            return NO;
+        }
+        BOOL isPageArea = !CFEqual(current, sidePeekScope)
+            && role && CFEqual(role, CFSTR("AXWebArea"));
+        if (isPageArea) {
+            [pageAreas addObject:CFBridgingRelease(CFRetain(current))];
+            if (role) CFRelease(role);
+            continue;
+        }
+        BOOL isLeaf = IsLeafAccessibilityRole(role);
+        if (role) CFRelease(role);
+        if (isLeaf) continue;
+
+        CFTypeRef childrenValue = CopyAttribute(current, kAXChildrenAttribute);
+        if (gFailureStage && strcmp(gFailureStage, "accessibility_timeout") == 0) return NO;
+        if (!childrenValue) continue;
+        if (CFGetTypeID(childrenValue) != CFArrayGetTypeID()) {
+            CFRelease(childrenValue);
+            continue;
+        }
+
+        CFArrayRef children = (CFArrayRef)childrenValue;
+        CFIndex childCount = CFArrayGetCount(children);
+        if (childCount > 512) {
+            CFRelease(childrenValue);
+            gFailureStage = "side_peek_page_search_limit";
+            return NO;
+        }
+        for (CFIndex i = 0; i < childCount; i++) {
+            CFTypeRef childValue = CFArrayGetValueAtIndex(children, i);
+            if (!childValue || CFGetTypeID(childValue) != AXUIElementGetTypeID()) continue;
+            if (scheduled >= 2048) {
+                CFRelease(childrenValue);
+                gFailureStage = "side_peek_page_search_limit";
+                return NO;
+            }
+            [pending addObject:@{
+                @"element": CFBridgingRelease(CFRetain((AXUIElementRef)childValue)),
+                @"depth": @(currentDepth + 1)
+            }];
+            scheduled++;
+        }
+        CFRelease(childrenValue);
     }
-    CFRelease(childrenValue);
     return YES;
 }
 
