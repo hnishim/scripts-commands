@@ -38,3 +38,6 @@ bash tests/test_weekly_maintenance_command.sh
 
 # HIR-280: isolated Notion CLI tests use fake ntn/textlint and a temporary HOME.
 python3 -m unittest discover -s tests -p 'test_notion_textlint*.py'
+
+# HIR-11: current Notion page link copier behavior contract.
+python3 -m unittest discover -s tests -p 'test_notion_current_page.py' -v
