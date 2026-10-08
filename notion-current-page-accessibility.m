@@ -249,15 +249,7 @@ static BOOL WalkForSidePeekScopes(AXUIElementRef element,
         return YES;
     }
 
-    CFStringRef role = CopyStringAttribute(element, kAXRoleAttribute);
-    BOOL isPageArea = role && CFEqual(role, CFSTR("AXWebArea"));
-    if (role) CFRelease(role);
-    if (isPageArea) {
-        CFStringRef title = CopyStringAttribute(element, kAXTitleAttribute);
-        BOOL hasPageTitle = title && CFStringGetLength(title) > 0;
-        if (title) CFRelease(title);
-        if (hasPageTitle) return YES;
-    }
+    // Side Peekはタイトル付きAXWebAreaの子孫として現れる場合があるため探索を続ける。
 
     CFTypeRef childrenValue = CopyAttribute(element, kAXChildrenAttribute);
     if (gFailureStage && strcmp(gFailureStage, "accessibility_timeout") == 0) return NO;
