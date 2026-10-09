@@ -105,6 +105,7 @@ sys.exit(int(os.environ.get("FAKE_WRITER_EXIT", "0")))
         focused_pane: str,
         *,
         side_peek_open: bool = False,
+        side_peek_in_active_tab: bool = True,
         main_links: list[str] | None = None,
         side_links: list[str] | None = None,
         outer_url: str | None = None,
@@ -123,7 +124,13 @@ sys.exit(int(os.environ.get("FAKE_WRITER_EXIT", "0")))
         side_titles = side_page_titles if side_page_titles is not None else [side_title]
         if side_peek_open:
             nodes.append(
-                {"id": "side-peek-scope", "parent": "window", "role": "AXGroup", "title": "Side Peek"}
+                {
+                    "id": "side-peek-scope",
+                    "parent": "window",
+                    "role": "AXGroup",
+                    "title": "Side Peek",
+                    "visible": side_peek_in_active_tab,
+                }
             )
             for index, title in enumerate(side_titles):
                 pane_id = f"side-pane-{index}"
@@ -184,6 +191,26 @@ sys.exit(int(os.environ.get("FAKE_WRITER_EXIT", "0")))
         self.assertEqual(payload["url"], URL_MAIN)
         self.assertEqual(payload["plain"], "[Main database page](" + URL_MAIN + ")")
         self.assertEqual(payload["html"], '<a href="' + URL_MAIN + '">Main database page</a>')
+
+    def test_side_peek_in_another_tab_does_not_override_current_page(self) -> None:
+        snapshot = self.ax_snapshot(
+            "main",
+            side_peek_open=True,
+            side_peek_in_active_tab=False,
+        )
+
+        result = self.run_command(snapshot)
+
+        self.assertEqual(result.returncode, 0, result.stderr)
+        payload = self.writer_payload()
+        self.assertEqual(payload["title"], "Main database page")
+        self.assertEqual(payload["url"], URL_MAIN)
+        self.assertEqual(payload["plain"], "[Main database page](" + URL_MAIN + ")")
+        self.assertEqual(payload["html"], '<a href="' + URL_MAIN + '">Main database page</a>')
+
+    def test_native_ax_reader_uses_ax_visible_children_for_side_peek_scopes(self) -> None:
+        source = AX_SOURCE.read_text(encoding="utf-8")
+        self.assertIn("kAXVisibleChildrenAttribute", source)
 
     def test_side_peek_fragment_is_removed_from_direct_child_link(self) -> None:
         snapshot = self.ax_snapshot(
