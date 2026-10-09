@@ -223,6 +223,56 @@ sys.exit(int(os.environ.get("FAKE_WRITER_EXIT", "0")))
                     f'<a href="{expected_url}">Canonical normal page</a>',
                 )
 
+    def test_normal_page_strips_hex_accessibility_fragment_and_preserves_query(self) -> None:
+        block_fragment = "89abcdef0123456789abcdef01234567"
+        raw_url = URL_APP + "#" + block_fragment
+        title = "日本語の単一ページ"
+        result = self.run_command(
+            self.ax_snapshot("main", main_title=title, main_links=[raw_url])
+        )
+        self.assertEqual(self.writer_log.exists(), result.returncode == 0)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        payload = self.writer_payload()
+        self.assertEqual(payload["title"], title)
+        self.assertEqual(payload["url"], URL_APP)
+        self.assertEqual(payload["plain"], f"[{title}]({URL_APP})")
+        self.assertEqual(payload["html"], f'<a href="{URL_APP}">{title}</a>')
+
+    def test_native_writer_declares_utf8_for_formatted_html(self) -> None:
+        native_test = self.root / "native-pasteboard-writer-test"
+        native_source = ROOT / "tests" / "native_pasteboard_writer_test.m"
+        self.assertTrue(native_source.is_file(), "native pasteboard writer harness is required")
+        compile_result = subprocess.run(
+            [
+                "/usr/bin/clang",
+                "-fobjc-arc",
+                "-framework",
+                "AppKit",
+                "-framework",
+                "Foundation",
+                str(native_source),
+                "-o",
+                str(native_test),
+            ],
+            text=True,
+            capture_output=True,
+        )
+        self.assertEqual(compile_result.returncode, 0, compile_result.stderr)
+        payload = {
+            "title": "日本語タイトル",
+            "url": "https://www.notion.so/0123456789abcdef0123456789abcdef",
+            "plain": "[日本語タイトル](https://www.notion.so/0123456789abcdef0123456789abcdef)",
+            "html": '<a href="https://www.notion.so/0123456789abcdef0123456789abcdef">日本語タイトル</a>',
+        }
+        result = subprocess.run(
+            [str(native_test)],
+            input=json.dumps(payload, ensure_ascii=False),
+            text=True,
+            capture_output=True,
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn("HIR11_NATIVE_PASTEBOARD_WRITER_TESTS:PASS", result.stdout)
+
     @unittest.skipUnless(sys.platform == "darwin" and Path("/usr/bin/clang").exists(), "macOS AX helper")
     def test_native_ax_selection_uses_supported_root_and_selected_tab(self) -> None:
         self.assertTrue(NATIVE_AX_TEST.is_file(), "native AX selection harness is required")
