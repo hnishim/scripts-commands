@@ -29,7 +29,7 @@ SIDE_PEEK_COPY_LINK_URL = (
 )
 SIDE_PEEK_OUTER_URL = (
     f"https://app.notion.com/p/example/{PARENT_PAGE_ID}"
-    f"?p={SIDE_CHILD_ID}&v=abcdef0123456789abcdef0123456789&pm=s"
+    f"?p={PARENT_PAGE_ID}&v=abcdef0123456789abcdef0123456789&pm=s"
 )
 DIRECT_CHILD_URL = f"https://app.notion.com/p/example/{SIDE_CHILD_ID}"
 
@@ -206,7 +206,7 @@ sys.exit(int(os.environ.get("FAKE_WRITER_EXIT", "0")))
         outer_urls = [
             f"https://app.notion.com/p/example/{PARENT_PAGE_ID}",
             f"https://app.notion.com/p/example/{PARENT_PAGE_ID}?v=abcdef0123456789abcdef0123456789",
-            f"https://app.notion.com/p/example/{PARENT_PAGE_ID}?p={SIDE_CHILD_ID}&pm=s",
+            f"https://app.notion.com/p/example/{PARENT_PAGE_ID}?p={PARENT_PAGE_ID}",
             SIDE_PEEK_OUTER_URL,
         ]
         for outer_url in outer_urls:
@@ -246,16 +246,21 @@ sys.exit(int(os.environ.get("FAKE_WRITER_EXIT", "0")))
         self.assertEqual(self.writer_payload()["url"], DIRECT_CHILD_URL)
 
     def test_side_peek_invalid_child_url_never_invokes_writer(self) -> None:
+        valid_legacy_parameters = f"?p={SIDE_CHILD_ID}&pm=s"
         invalid_urls = [
-            "https://app.notion.com/p/example/not-a-page-id?p=" + SIDE_CHILD_ID,
-            "https://app.notion.com/p/example",
-            f"https://app.notion.com/p/example/{SIDE_CHILD_ID}/extra",
-            "https://app.notion.com/p/example/",
-            f"https://example.com/p/example/{SIDE_CHILD_ID}",
-            f"http://app.notion.com/p/example/{SIDE_CHILD_ID}",
-            f"https://user@app.notion.com/p/example/{SIDE_CHILD_ID}",
-            f"https://app.notion.com:8443/p/example/{SIDE_CHILD_ID}",
-            "https://app.notion.com/p/example/%2F" + SIDE_CHILD_ID,
+            f"https://app.notion.com/p/example/not-a-page-id{valid_legacy_parameters}",
+            f"https://app.notion.com/p/example{valid_legacy_parameters}",
+            f"https://app.notion.com/p/example/{SIDE_CHILD_ID}/extra{valid_legacy_parameters}",
+            f"https://app.notion.com/p/example/{valid_legacy_parameters}",
+            f"https://app.notion.com/p//{SIDE_CHILD_ID}{valid_legacy_parameters}",
+            f"https://app.notion.com/p/example%2Fother/{SIDE_CHILD_ID}{valid_legacy_parameters}",
+            f"https://app.notion.com/not-p/example/{SIDE_CHILD_ID}{valid_legacy_parameters}",
+            f"https://example.com/p/example/{SIDE_CHILD_ID}{valid_legacy_parameters}",
+            f"http://app.notion.com/p/example/{SIDE_CHILD_ID}{valid_legacy_parameters}",
+            f"https://user@app.notion.com/p/example/{SIDE_CHILD_ID}{valid_legacy_parameters}",
+            f"https://app.notion.com:8443/p/example/{SIDE_CHILD_ID}{valid_legacy_parameters}",
+            f"https://app.notion.com/p/example%2Fother/{SIDE_CHILD_ID}{valid_legacy_parameters}",
+            f"https://app.notion.com/p/example/%2F{SIDE_CHILD_ID}{valid_legacy_parameters}",
         ]
         cases = [
             ("child region missing", self.ax_snapshot("main", side_peek_open=True, side_page_titles=[])),
