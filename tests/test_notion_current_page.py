@@ -249,7 +249,7 @@ sys.exit(int(os.environ.get("FAKE_WRITER_EXIT", "0")))
         result = subprocess.run([str(executable_path)], text=True, capture_output=True)
         self.assertEqual(result.returncode, 0, result.stderr)
         snapshots = [json.loads(line) for line in result.stdout.splitlines() if line.strip()]
-        self.assertEqual(len(snapshots), 2, result.stderr)
+        self.assertEqual(len(snapshots), 3, result.stderr)
 
         def snapshot_page(snapshot: dict) -> tuple[str | None, str | None]:
             nodes = snapshot["accessibility_tree"]["nodes"]
@@ -267,6 +267,10 @@ sys.exit(int(os.environ.get("FAKE_WRITER_EXIT", "0")))
                 "Selected child",
                 "https://app.notion.com/p/example/89abcdef0123456789abcdef01234567?pvs=23",
             ),
+        )
+        self.assertEqual(
+            snapshot_page(snapshots[2]),
+            ("Selected page", "https://www.notion.so/selected-page-id"),
         )
 
     def test_side_peek_fragment_is_removed_from_direct_child_link(self) -> None:

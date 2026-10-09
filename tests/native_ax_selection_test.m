@@ -13,6 +13,7 @@
 
 @interface HIR11TestWorkspace : NSObject
 @property(nonatomic, strong) HIR11TestRunningApplication *frontmostApplication;
+@property(nonatomic, copy) NSArray<HIR11TestRunningApplication *> *runningApplications;
 + (instancetype)sharedWorkspace;
 @end
 
@@ -53,6 +54,7 @@ static NSString *gTestFailureStage;
 static NSMutableDictionary<NSString *, NSDictionary *> *gTestNodes;
 static NSMutableDictionary<NSString *, id> *gTestTokens;
 static NSMutableSet<NSString *> *gTestAttributeQueries;
+static NSMutableArray<NSNumber *> *gTestCreatedApplicationPIDs;
 
 @implementation HIR11TestWorkspace
 
@@ -64,6 +66,7 @@ static NSMutableSet<NSString *> *gTestAttributeQueries;
         workspace.frontmostApplication = [[HIR11TestRunningApplication alloc] init];
         workspace.frontmostApplication.bundleIdentifier = @"notion.id";
         workspace.frontmostApplication.processIdentifier = 42;
+        workspace.runningApplications = @[workspace.frontmostApplication];
     });
     return workspace;
 }
@@ -125,7 +128,7 @@ static void HIR11TestSetMessagingTimeout(AXUIElementRef element, Float32 timeout
 }
 
 static AXUIElementRef HIR11TestCreateApplication(pid_t pid) {
-    (void)pid;
+    [gTestCreatedApplicationPIDs addObject:@(pid)];
     CFDataRef token = (__bridge CFDataRef)gTestTokens[@"application"];
     return (AXUIElementRef)CFRetain(token);
 }
@@ -167,7 +170,14 @@ static void HIR11TestBuildFixture(BOOL selectedHasSidePeek,
     gTestNodes = [NSMutableDictionary dictionary];
     gTestTokens = [NSMutableDictionary dictionary];
     gTestAttributeQueries = [NSMutableSet set];
+    gTestCreatedApplicationPIDs = [NSMutableArray array];
     gTestFailureStage = nil;
+
+    HIR11TestRunningApplication *notion = [[HIR11TestRunningApplication alloc] init];
+    notion.bundleIdentifier = @"notion.id";
+    notion.processIdentifier = 42;
+    HIR11TestWorkspace.sharedWorkspace.frontmostApplication = notion;
+    HIR11TestWorkspace.sharedWorkspace.runningApplications = @[notion];
 
     HIR11TestAddElement(@"application", @{
         @"AXFocusedWindow": HIR11TestToken(@"window") ?: NSNull.null
@@ -290,6 +300,70 @@ static int HIR11TestRunScenario(BOOL selectedHasSidePeek,
     return 0;
 }
 
+static HIR11TestRunningApplication *HIR11TestApp(NSString *bundleIdentifier, pid_t pid) {
+    HIR11TestRunningApplication *app = [[HIR11TestRunningApplication alloc] init];
+    app.bundleIdentifier = bundleIdentifier;
+    app.processIdentifier = pid;
+    return app;
+}
+
+static int HIR11TestRunRaycastForegroundScenario(void) {
+    HIR11TestBuildFixture(NO, NO, @"Selected page", NO);
+    HIR11TestRunningApplication *raycast = HIR11TestApp(@"com.raycast.macos", 99);
+    HIR11TestWorkspace.sharedWorkspace.frontmostApplication = raycast;
+    HIR11TestWorkspace.sharedWorkspace.runningApplications = @[
+        HIR11TestApp(@"notion.id", 42), raycast
+    ];
+    gDeadline = CFAbsoluteTimeGetCurrent() + 5.0;
+    gFailureStage = "accessibility_read_failed";
+    int result = EmitFocusedPageSnapshot();
+    if (result != 0) {
+        fprintf(stderr, "Raycast-frontmost scenario failed at %s\n",
+                gTestFailureStage.UTF8String ?: "unknown");
+        return 1;
+    }
+    if (![gTestCreatedApplicationPIDs isEqualToArray:@[@42]]) {
+        fprintf(stderr, "expected AX application PID 42 for Notion; requested %s\n",
+                gTestCreatedApplicationPIDs.description.UTF8String);
+        return 1;
+    }
+    return 0;
+}
+
+static int HIR11TestRunMissingNotionScenario(void) {
+    HIR11TestBuildFixture(NO, NO, @"Selected page", NO);
+    HIR11TestRunningApplication *raycast = HIR11TestApp(@"com.raycast.macos", 99);
+    HIR11TestWorkspace.sharedWorkspace.frontmostApplication = raycast;
+    HIR11TestWorkspace.sharedWorkspace.runningApplications = @[raycast];
+    gDeadline = CFAbsoluteTimeGetCurrent() + 5.0;
+    gFailureStage = "accessibility_read_failed";
+    int result = EmitFocusedPageSnapshot();
+    if (result == 0 || ![gTestFailureStage isEqualToString:@"notion_process_unavailable"]
+            || gTestCreatedApplicationPIDs.count != 0) {
+        fprintf(stderr, "missing Notion process did not fail closed before AX access\n");
+        return 1;
+    }
+    return 0;
+}
+
+static int HIR11TestRunAmbiguousNotionScenario(void) {
+    HIR11TestBuildFixture(NO, NO, @"Selected page", NO);
+    HIR11TestRunningApplication *raycast = HIR11TestApp(@"com.raycast.macos", 99);
+    HIR11TestWorkspace.sharedWorkspace.frontmostApplication = raycast;
+    HIR11TestWorkspace.sharedWorkspace.runningApplications = @[
+        HIR11TestApp(@"notion.id", 42), HIR11TestApp(@"notion.id", 43), raycast
+    ];
+    gDeadline = CFAbsoluteTimeGetCurrent() + 5.0;
+    gFailureStage = "accessibility_read_failed";
+    int result = EmitFocusedPageSnapshot();
+    if (result == 0 || ![gTestFailureStage isEqualToString:@"notion_process_ambiguous"]
+            || gTestCreatedApplicationPIDs.count != 0) {
+        fprintf(stderr, "ambiguous Notion processes did not fail closed before AX access\n");
+        return 1;
+    }
+    return 0;
+}
+
 int main(void) {
     @autoreleasepool {
         int failures = 0;
@@ -299,7 +373,10 @@ int main(void) {
                                          @"page_area_missing", nil);
         failures += HIR11TestRunScenario(NO, YES, @"Selected page", YES,
                                          @"page_area_ambiguous", nil);
-        if (failures == 0) fprintf(stderr, "HIR11_NATIVE_AX_SELECTION_TESTS:PASS:4\n");
+        failures += HIR11TestRunRaycastForegroundScenario();
+        failures += HIR11TestRunMissingNotionScenario();
+        failures += HIR11TestRunAmbiguousNotionScenario();
+        if (failures == 0) fprintf(stderr, "HIR11_NATIVE_AX_SELECTION_TESTS:PASS:7\n");
         return failures == 0 ? 0 : 1;
     }
 }
