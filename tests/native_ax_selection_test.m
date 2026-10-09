@@ -133,11 +133,14 @@ static AXUIElementRef HIR11TestCreateApplication(pid_t pid) {
 static int HIR11TestFprintf(FILE *stream, const char *format, ...) {
     va_list arguments;
     va_start(arguments, format);
+    va_list outputArguments;
+    va_copy(outputArguments, arguments);
     if (strcmp(format, "HIR11_STAGE:%s\n") == 0) {
         const char *stage = va_arg(arguments, const char *);
         gTestFailureStage = [NSString stringWithUTF8String:stage];
     }
-    int result = vfprintf(stream, format, arguments);
+    int result = vfprintf(stream, format, outputArguments);
+    va_end(outputArguments);
     va_end(arguments);
     return result;
 }
