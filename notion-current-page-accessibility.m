@@ -428,31 +428,6 @@ static int CopyFullPageLinkWithinScope(AXUIElementRef sidePeekScope,
     return 0;
 }
 
-static AXUIElementRef CopyAncestorWithRole(AXUIElementRef element, CFStringRef targetRole) {
-    AXUIElementRef current = (AXUIElementRef)CFRetain(element);
-    for (NSUInteger depth = 0; current && depth < 64; depth++) {
-        CFStringRef role = CopyStringAttribute(current, kAXRoleAttribute);
-        BOOL matches = role && CFEqual(role, targetRole);
-        if (role) CFRelease(role);
-        if (matches) return current;
-
-        CFTypeRef parentValue = CopyAttribute(current, kAXParentAttribute);
-        if (!parentValue || CFGetTypeID(parentValue) != AXUIElementGetTypeID()) {
-            if (parentValue) CFRelease(parentValue);
-            break;
-        }
-        AXUIElementRef parent = (AXUIElementRef)parentValue;
-        if (CFEqual(current, parent)) {
-            CFRelease(parent);
-            break;
-        }
-        CFRelease(current);
-        current = parent;
-    }
-    if (current) CFRelease(current);
-    return NULL;
-}
-
 static BOOL WalkForSidePeekScopes(AXUIElementRef element,
                                   NSUInteger depth,
                                   NSUInteger *visited,
@@ -489,7 +464,7 @@ static BOOL WalkForSidePeekScopes(AXUIElementRef element,
         if (role) CFRelease(role);
         if (isLeaf) continue;
 
-        CFTypeRef childrenValue = CopyAttribute(current, kAXChildrenAttribute);
+        CFTypeRef childrenValue = CopyAttribute(current, kAXVisibleChildrenAttribute);
         if (gFailureStage && strcmp(gFailureStage, "accessibility_timeout") == 0) return NO;
         if (!childrenValue) continue;
         if (CFGetTypeID(childrenValue) != CFArrayGetTypeID()) {
@@ -510,6 +485,81 @@ static BOOL WalkForSidePeekScopes(AXUIElementRef element,
             if (scheduled >= 2048) {
                 CFRelease(childrenValue);
                 gFailureStage = "side_peek_scope_search_limit";
+                return NO;
+            }
+            [pending addObject:@{
+                @"element": CFBridgingRelease(CFRetain((AXUIElementRef)childValue)),
+                @"depth": @(currentDepth + 1)
+            }];
+            scheduled++;
+        }
+        CFRelease(childrenValue);
+    }
+    return YES;
+}
+
+static BOOL WalkForVisiblePageAreas(AXUIElementRef element,
+                                   NSUInteger depth,
+                                   NSUInteger *visited,
+                                   NSMutableArray *pageAreas) {
+    NSMutableArray *pending = [NSMutableArray arrayWithObject:@{
+        @"element": CFBridgingRelease(CFRetain(element)), @"depth": @(depth)
+    }];
+    NSUInteger next = 0;
+    NSUInteger scheduled = 1;
+    while (next < pending.count) {
+        if (CFAbsoluteTimeGetCurrent() >= gDeadline) {
+            gFailureStage = "accessibility_timeout";
+            return NO;
+        }
+        NSDictionary *entry = pending[next++];
+        AXUIElementRef current = (__bridge AXUIElementRef)entry[@"element"];
+        NSUInteger currentDepth = [entry[@"depth"] unsignedIntegerValue];
+        if (currentDepth > 32 || ++(*visited) > 2048) {
+            gFailureStage = "page_area_search_limit";
+            return NO;
+        }
+
+        CFStringRef role = CopyStringAttribute(current, kAXRoleAttribute);
+        if (gFailureStage && strcmp(gFailureStage, "accessibility_timeout") == 0) {
+            if (role) CFRelease(role);
+            return NO;
+        }
+        if (!CFEqual(current, element) && IsSidePeekScope(current)) {
+            if (role) CFRelease(role);
+            continue;
+        }
+        BOOL isPageArea = role && CFEqual(role, CFSTR("AXWebArea"));
+        if (isPageArea) {
+            [pageAreas addObject:CFBridgingRelease(CFRetain(current))];
+            if (role) CFRelease(role);
+            continue;
+        }
+        BOOL isLeaf = IsLeafAccessibilityRole(role);
+        if (role) CFRelease(role);
+        if (isLeaf) continue;
+
+        CFTypeRef childrenValue = CopyAttribute(current, kAXVisibleChildrenAttribute);
+        if (gFailureStage && strcmp(gFailureStage, "accessibility_timeout") == 0) return NO;
+        if (!childrenValue) continue;
+        if (CFGetTypeID(childrenValue) != CFArrayGetTypeID()) {
+            CFRelease(childrenValue);
+            continue;
+        }
+
+        CFArrayRef children = (CFArrayRef)childrenValue;
+        CFIndex childCount = CFArrayGetCount(children);
+        if (childCount > 512) {
+            CFRelease(childrenValue);
+            gFailureStage = "page_area_search_limit";
+            return NO;
+        }
+        for (CFIndex i = 0; i < childCount; i++) {
+            CFTypeRef childValue = CFArrayGetValueAtIndex(children, i);
+            if (!childValue || CFGetTypeID(childValue) != AXUIElementGetTypeID()) continue;
+            if (scheduled >= 2048) {
+                CFRelease(childrenValue);
+                gFailureStage = "page_area_search_limit";
                 return NO;
             }
             [pending addObject:@{
@@ -737,78 +787,23 @@ static int EmitFocusedPageSnapshot(void) {
     if (!application) return Fail("notion_process_unavailable");
     AXUIElementSetMessagingTimeout(application, 0.5);
 
-    CFTypeRef focusedValue = CopyAttribute(application, kAXFocusedUIElementAttribute);
-    if (!focusedValue || CFGetTypeID(focusedValue) != AXUIElementGetTypeID()) {
-        if (focusedValue) CFRelease(focusedValue);
-        CFRelease(application);
-        return Fail(gFailureStage);
-    }
-
-    AXUIElementRef current = (AXUIElementRef)focusedValue;
-    AXUIElementRef webArea = NULL;
-    NSUInteger parentSteps = 0;
-    while (current && parentSteps < 64) {
-        CFTypeRef roleValue = CopyAttribute(current, kAXRoleAttribute);
-        if (roleValue && CFGetTypeID(roleValue) == CFStringGetTypeID()
-                && CFEqual(roleValue, CFSTR("AXWebArea"))) {
-            webArea = (AXUIElementRef)CFRetain(current);
-            CFRelease(roleValue);
-            break;
-        }
-        if (roleValue) CFRelease(roleValue);
-
-        if (parentSteps >= 64) break;
-        CFTypeRef parentValue = CopyAttribute(current, kAXParentAttribute);
-        if (!parentValue || CFGetTypeID(parentValue) != AXUIElementGetTypeID()) {
-            if (parentValue) CFRelease(parentValue);
-            break;
-        }
-        AXUIElementRef parent = (AXUIElementRef)parentValue;
-        if (CFEqual(current, parent)) {
-            CFRelease(parent);
-            break;
-        }
-        CFRelease(current);
-        current = parent;
-        parentSteps++;
-    }
-
-    if (current) CFRelease(current);
-    if (!webArea && parentSteps >= 64) {
-        CFRelease(application);
-        return Fail("page_area_depth_limit");
-    }
-    if (!webArea) {
-        CFRelease(application);
-        return Fail(gFailureStage);
-    }
-
-    AXUIElementRef window = CopyAncestorWithRole(webArea, CFSTR("AXWindow"));
-    if (!window) {
-        CFTypeRef focusedWindowValue = CopyAttribute(application, kAXFocusedWindowAttribute);
-        if (focusedWindowValue && CFGetTypeID(focusedWindowValue) == AXUIElementGetTypeID()) {
-            window = (AXUIElementRef)focusedWindowValue;
-        } else if (focusedWindowValue) {
-            CFRelease(focusedWindowValue);
-        }
-    }
-    if (!window) {
-        CFRelease(webArea);
+    CFTypeRef focusedWindowValue = CopyAttribute(application, kAXFocusedWindowAttribute);
+    if (!focusedWindowValue || CFGetTypeID(focusedWindowValue) != AXUIElementGetTypeID()) {
+        if (focusedWindowValue) CFRelease(focusedWindowValue);
         CFRelease(application);
         return Fail("notion_window_unavailable");
     }
+    AXUIElementRef window = (AXUIElementRef)focusedWindowValue;
 
     NSMutableArray *sidePeekScopes = [NSMutableArray array];
     NSUInteger scopeNodesVisited = 0;
     if (!WalkForSidePeekScopes(window, 0, &scopeNodesVisited, sidePeekScopes)) {
         CFRelease(window);
-        CFRelease(webArea);
         CFRelease(application);
         return Fail(gFailureStage);
     }
     if (sidePeekScopes.count > 1) {
         CFRelease(window);
-        CFRelease(webArea);
         CFRelease(application);
         return Fail("side_peek_scope_ambiguous");
     }
@@ -819,7 +814,6 @@ static int EmitFocusedPageSnapshot(void) {
         if (!WalkForSidePeekPageAreas(sidePeekScope, sidePeekScope, 0,
                                       &pageNodesVisited, pageAreas)) {
             CFRelease(window);
-            CFRelease(webArea);
             CFRelease(application);
             return Fail(gFailureStage);
         }
@@ -827,14 +821,12 @@ static int EmitFocusedPageSnapshot(void) {
             pageNodesVisited = 0;
             if (!WalkForSidePeekPageTitles(sidePeekScope, &pageNodesVisited, pageAreas)) {
                 CFRelease(window);
-                CFRelease(webArea);
                 CFRelease(application);
                 return Fail(gFailureStage);
             }
         }
         if (pageAreas.count != 1) {
             CFRelease(window);
-            CFRelease(webArea);
             CFRelease(application);
             return Fail(pageAreas.count == 0
                 ? "side_peek_page_missing" : "side_peek_page_ambiguous");
@@ -842,11 +834,24 @@ static int EmitFocusedPageSnapshot(void) {
         AXUIElementRef sidePageArea = (__bridge AXUIElementRef)pageAreas[0];
         int result = EmitSidePeekPageSnapshot(sidePeekScope, sidePageArea);
         CFRelease(window);
-        CFRelease(webArea);
         CFRelease(application);
         return result;
     }
+
+    NSMutableArray *visiblePageAreas = [NSMutableArray array];
+    NSUInteger pageNodesVisited = 0;
+    if (!WalkForVisiblePageAreas(window, 0, &pageNodesVisited, visiblePageAreas)) {
+        CFRelease(window);
+        CFRelease(application);
+        return Fail(gFailureStage);
+    }
     CFRelease(window);
+    if (visiblePageAreas.count != 1) {
+        CFRelease(application);
+        return Fail(visiblePageAreas.count == 0
+            ? "page_area_missing" : "page_area_ambiguous");
+    }
+    AXUIElementRef webArea = (__bridge AXUIElementRef)visiblePageAreas[0];
 
     CFStringRef titleValue = CopyStringAttribute(webArea, kAXTitleAttribute);
     CFStringRef urlValue = CopyURLAttribute(webArea);
@@ -859,13 +864,11 @@ static int EmitFocusedPageSnapshot(void) {
         int linkResult = CopyFullPageLinkFromAncestors(webArea, &linkLabel, &urlValue);
         if (linkResult < 0) {
             if (titleValue) CFRelease(titleValue);
-            CFRelease(webArea);
             CFRelease(application);
             return Fail(gFailureStage);
         }
         if (linkLabel) CFRelease(linkLabel);
     }
-    CFRelease(webArea);
     CFRelease(application);
     if (!titleValue || !urlValue) {
         if (titleValue) CFRelease(titleValue);
