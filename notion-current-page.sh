@@ -52,6 +52,7 @@ PY
     case "$FAILURE_STAGE" in
       notion_not_frontmost) echo "Notionが最前面ではないため、処理を中止しました。" ;;
       notion_process_unavailable) echo "Notionアプリを特定できませんでした。" ;;
+      notion_process_ambiguous) echo "Notionアプリを一意に特定できませんでした。" ;;
       page_window_title_missing) echo "Notionのウィンドウ名を取得できないため、処理を中止しました。" ;;
       page_area_missing) echo "Notionで選択中のページを特定できないため、処理を中止しました。" ;;
       page_area_ambiguous) echo "Notionで選択中のページを一意に特定できないため、処理を中止しました。" ;;
@@ -251,18 +252,25 @@ try:
     if any(ord(ch) < 32 or ord(ch) == 127 for ch in title + raw_url):
         raise ValueError("control character")
     parsed = urlsplit(raw_url)
+    valid_fragment = (
+        not parsed.fragment
+        or parsed.fragment == "main"
+        or re.fullmatch(r"[0-9a-fA-F]{32}", parsed.fragment) is not None
+    )
     if (parsed.scheme != "https" or parsed.hostname not in {"notion.so", "www.notion.so", "app.notion.com"}
             or parsed.username is not None or parsed.password is not None
-            or not parsed.path or parsed.path == "/" or parsed.fragment):
+            or not parsed.path or parsed.path == "/"
+            or not valid_fragment):
         raise ValueError("invalid Notion URL")
+    canonical_url = urlunsplit((parsed.scheme, parsed.netloc, parsed.path, parsed.query, ""))
     md_url = urlunsplit((parsed.scheme, parsed.netloc, quote(parsed.path, safe="/%:@-._~!$&'*,;=+"),
                          quote(parsed.query, safe="=&%:@-._~!$'*,;+?:/"), ""))
     md_title = title.replace("\\", "\\\\").replace("[", "\\[").replace("]", "\\]")
     payload = {
         "title": title,
-        "url": raw_url,
+        "url": canonical_url,
         "plain": f"[{md_title}]({md_url})",
-        "html": f'<a href="{html.escape(raw_url, quote=True)}">{html.escape(title, quote=True)}</a>',
+        "html": f'<a href="{html.escape(canonical_url, quote=True)}">{html.escape(title, quote=True)}</a>',
     }
     json.dump(payload, sys.stdout, ensure_ascii=False, separators=(",", ":"))
 except (OSError, ValueError, TypeError, KeyError, json.JSONDecodeError):

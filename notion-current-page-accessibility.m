@@ -788,12 +788,18 @@ static int EmitSidePeekPageSnapshot(AXUIElementRef sidePeekScope,
 }
 
 static int EmitFocusedPageSnapshot(void) {
-    NSRunningApplication *frontmost = NSWorkspace.sharedWorkspace.frontmostApplication;
-    if (![frontmost.bundleIdentifier isEqualToString:@"notion.id"]) {
-        return Fail("notion_not_frontmost");
+    NSRunningApplication *notionApplication = nil;
+    NSUInteger notionApplicationCount = 0;
+    for (NSRunningApplication *candidate in NSWorkspace.sharedWorkspace.runningApplications) {
+        if ([candidate.bundleIdentifier isEqualToString:@"notion.id"]) {
+            notionApplication = candidate;
+            notionApplicationCount++;
+        }
     }
+    if (notionApplicationCount == 0) return Fail("notion_process_unavailable");
+    if (notionApplicationCount != 1) return Fail("notion_process_ambiguous");
 
-    AXUIElementRef application = AXUIElementCreateApplication((pid_t)frontmost.processIdentifier);
+    AXUIElementRef application = AXUIElementCreateApplication((pid_t)notionApplication.processIdentifier);
     if (!application) return Fail("notion_process_unavailable");
     AXUIElementSetMessagingTimeout(application, 0.5);
 
@@ -948,7 +954,9 @@ static int WritePasteboardPayload(void) {
         return Fail("invalid_payload");
     }
 
-    NSData *htmlData = [(NSString *)htmlValue dataUsingEncoding:NSUTF8StringEncoding];
+    NSString *htmlDocument = [NSString stringWithFormat:
+        @"<html><head><meta charset=\"utf-8\"></head><body>%@</body></html>", htmlValue];
+    NSData *htmlData = [htmlDocument dataUsingEncoding:NSUTF8StringEncoding];
     if (!htmlData) return Fail("pasteboard_payload_encoding_failed");
 
     NSPasteboardItem *item = [[NSPasteboardItem alloc] init];
