@@ -498,10 +498,11 @@ static BOOL WalkForSidePeekScopes(AXUIElementRef element,
     return YES;
 }
 
-static BOOL WalkForVisiblePageAreas(AXUIElementRef element,
-                                   NSUInteger depth,
-                                   NSUInteger *visited,
-                                   NSMutableArray *pageAreas) {
+static BOOL WalkForMatchingPageAreas(AXUIElementRef element,
+                                     CFStringRef windowTitle,
+                                     NSUInteger depth,
+                                     NSUInteger *visited,
+                                     NSMutableArray *pageAreas) {
     NSMutableArray *pending = [NSMutableArray arrayWithObject:@{
         @"element": CFBridgingRelease(CFRetain(element)), @"depth": @(depth)
     }];
@@ -531,7 +532,16 @@ static BOOL WalkForVisiblePageAreas(AXUIElementRef element,
         }
         BOOL isPageArea = role && CFEqual(role, CFSTR("AXWebArea"));
         if (isPageArea) {
-            [pageAreas addObject:CFBridgingRelease(CFRetain(current))];
+            CFStringRef pageTitle = CopyStringAttribute(current, kAXTitleAttribute);
+            if (gFailureStage && strcmp(gFailureStage, "accessibility_timeout") == 0) {
+                if (pageTitle) CFRelease(pageTitle);
+                if (role) CFRelease(role);
+                return NO;
+            }
+            if (pageTitle && CFEqual(pageTitle, windowTitle)) {
+                [pageAreas addObject:CFBridgingRelease(CFRetain(current))];
+            }
+            if (pageTitle) CFRelease(pageTitle);
             if (role) CFRelease(role);
             continue;
         }
@@ -539,7 +549,7 @@ static BOOL WalkForVisiblePageAreas(AXUIElementRef element,
         if (role) CFRelease(role);
         if (isLeaf) continue;
 
-        CFTypeRef childrenValue = CopyAttribute(current, kAXVisibleChildrenAttribute);
+        CFTypeRef childrenValue = CopyAttribute(current, kAXChildrenAttribute);
         if (gFailureStage && strcmp(gFailureStage, "accessibility_timeout") == 0) return NO;
         if (!childrenValue) continue;
         if (CFGetTypeID(childrenValue) != CFArrayGetTypeID()) {
@@ -795,9 +805,35 @@ static int EmitFocusedPageSnapshot(void) {
     }
     AXUIElementRef window = (AXUIElementRef)focusedWindowValue;
 
+    CFStringRef windowTitle = CopyStringAttribute(window, kAXTitleAttribute);
+    if (!windowTitle || CFStringGetLength(windowTitle) == 0) {
+        if (windowTitle) CFRelease(windowTitle);
+        CFRelease(window);
+        CFRelease(application);
+        return Fail("page_window_title_missing");
+    }
+
+    NSMutableArray *selectedPageAreas = [NSMutableArray array];
+    NSUInteger pageNodesVisited = 0;
+    if (!WalkForMatchingPageAreas(window, windowTitle, 0,
+                                  &pageNodesVisited, selectedPageAreas)) {
+        CFRelease(windowTitle);
+        CFRelease(window);
+        CFRelease(application);
+        return Fail(gFailureStage);
+    }
+    CFRelease(windowTitle);
+    if (selectedPageAreas.count != 1) {
+        CFRelease(window);
+        CFRelease(application);
+        return Fail(selectedPageAreas.count == 0
+            ? "page_area_missing" : "page_area_ambiguous");
+    }
+    AXUIElementRef webArea = (__bridge AXUIElementRef)selectedPageAreas[0];
+
     NSMutableArray *sidePeekScopes = [NSMutableArray array];
     NSUInteger scopeNodesVisited = 0;
-    if (!WalkForSidePeekScopes(window, 0, &scopeNodesVisited, sidePeekScopes)) {
+    if (!WalkForSidePeekScopes(webArea, 0, &scopeNodesVisited, sidePeekScopes)) {
         CFRelease(window);
         CFRelease(application);
         return Fail(gFailureStage);
@@ -838,20 +874,7 @@ static int EmitFocusedPageSnapshot(void) {
         return result;
     }
 
-    NSMutableArray *visiblePageAreas = [NSMutableArray array];
-    NSUInteger pageNodesVisited = 0;
-    if (!WalkForVisiblePageAreas(window, 0, &pageNodesVisited, visiblePageAreas)) {
-        CFRelease(window);
-        CFRelease(application);
-        return Fail(gFailureStage);
-    }
     CFRelease(window);
-    if (visiblePageAreas.count != 1) {
-        CFRelease(application);
-        return Fail(visiblePageAreas.count == 0
-            ? "page_area_missing" : "page_area_ambiguous");
-    }
-    AXUIElementRef webArea = (__bridge AXUIElementRef)visiblePageAreas[0];
 
     CFStringRef titleValue = CopyStringAttribute(webArea, kAXTitleAttribute);
     CFStringRef urlValue = CopyURLAttribute(webArea);

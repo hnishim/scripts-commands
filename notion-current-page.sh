@@ -52,6 +52,9 @@ PY
     case "$FAILURE_STAGE" in
       notion_not_frontmost) echo "Notionが最前面ではないため、処理を中止しました。" ;;
       notion_process_unavailable) echo "Notionアプリを特定できませんでした。" ;;
+      page_window_title_missing) echo "Notionのウィンドウ名を取得できないため、処理を中止しました。" ;;
+      page_area_missing) echo "Notionで選択中のページを特定できないため、処理を中止しました。" ;;
+      page_area_ambiguous) echo "Notionで選択中のページを一意に特定できないため、処理を中止しました。" ;;
       focused_element_missing) echo "Notionのフォーカス中のUI要素を取得できませんでした。" ;;
       accessibility_read_failed) echo "Notionのアクセシビリティ情報を取得できませんでした。" ;;
       accessibility_timeout) echo "Notionの画面情報を制限時間内に取得できませんでした。" ;;
