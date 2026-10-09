@@ -78,7 +78,7 @@ import json
 import pathlib
 import re
 import sys
-from urllib.parse import parse_qsl, quote, unquote, urlsplit, urlunsplit
+from urllib.parse import quote, unquote, urlsplit, urlunsplit
 
 MAX_NODES = 512
 MAX_ANCESTORS = 64
@@ -137,21 +137,22 @@ def side_peek_child_url(raw_url):
             or not segments[2] or not segments[3]):
         raise ValueError("invalid Side Peek link path")
     workspace = unquote(segments[2])
-    parent_page = unquote(segments[3])
-    if (not workspace or not parent_page
-            or any(char in workspace + parent_page for char in "/\\")
-            or workspace in {".", ".."} or parent_page in {".", ".."}
-            or any(ord(char) < 32 or ord(char) == 127 for char in workspace + parent_page)):
+    page_token = unquote(segments[3])
+    if (not workspace or not page_token
+            or any(char in workspace + page_token for char in "/\\")
+            or workspace in {".", ".."} or page_token in {".", ".."}
+            or any(ord(char) < 32 or ord(char) == 127 for char in workspace + page_token)):
         raise ValueError("invalid Notion workspace segment")
 
-    parameters = parse_qsl(parsed.query, keep_blank_values=True)
-    child_ids = [value for key, value in parameters if key == "p"]
-    side_modes = [value for key, value in parameters if key == "pm"]
-    if (len(child_ids) != 1 or re.fullmatch(r"[0-9a-fA-F]{32}", child_ids[0]) is None
-            or len(side_modes) != 1 or side_modes[0] != "s"):
-        raise ValueError("invalid Side Peek child parameters")
+    if re.fullmatch(r"[0-9a-fA-F]{32}", page_token):
+        child_id = page_token
+    else:
+        match = re.fullmatch(r".+-([0-9a-fA-F]{32})", page_token)
+        if not match:
+            raise ValueError("invalid Side Peek child page token")
+        child_id = match.group(1)
 
-    direct_path = f"/p/{segments[2]}/{child_ids[0]}"
+    direct_path = f"/p/{segments[2]}/{child_id}"
     return urlunsplit(("https", "app.notion.com", direct_path, "", ""))
 
 def resolve_side_peek_page(scope_id, nodes):
