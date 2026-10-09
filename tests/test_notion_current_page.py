@@ -238,6 +238,10 @@ sys.exit(int(os.environ.get("FAKE_WRITER_EXIT", "0")))
         self.assertEqual(payload["plain"], f"[{title}]({URL_APP})")
         self.assertEqual(payload["html"], f'<a href="{URL_APP}">{title}</a>')
 
+    @unittest.skipUnless(
+        sys.platform == "darwin" and Path("/usr/bin/clang").exists(),
+        "macOS native pasteboard writer",
+    )
     def test_native_writer_declares_utf8_for_formatted_html(self) -> None:
         native_test = self.root / "native-pasteboard-writer-test"
         native_source = ROOT / "tests" / "native_pasteboard_writer_test.m"
