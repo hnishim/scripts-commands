@@ -5,7 +5,6 @@ from __future__ import annotations
 
 import json
 import os
-import re
 import stat
 import subprocess
 import sys
@@ -17,6 +16,7 @@ from textwrap import dedent
 ROOT = Path(__file__).resolve().parents[1]
 SCRIPT = ROOT / "notion-current-page.sh"
 AX_SOURCE = ROOT / "notion-current-page-accessibility.m"
+NATIVE_AX_TEST = ROOT / "tests" / "native_ax_selection_test.m"
 
 URL_MAIN = "https://www.notion.so/0123456789abcdef0123456789abcdef"
 URL_SIDE = "https://www.notion.so/fedcba9876543210fedcba9876543210"
@@ -191,17 +191,51 @@ sys.exit(int(os.environ.get("FAKE_WRITER_EXIT", "0")))
         self.assertEqual(payload["plain"], "[Main database page](" + URL_MAIN + ")")
         self.assertEqual(payload["html"], '<a href="' + URL_MAIN + '">Main database page</a>')
 
-    def test_native_side_peek_scope_walker_uses_visible_children(self) -> None:
-        source = AX_SOURCE.read_text(encoding="utf-8")
-        start = source.index("static BOOL WalkForSidePeekScopes(")
-        end = source.index("\nstatic BOOL WalkForSidePeekPageAreas(", start)
-        walker = re.sub(r"/\*.*?\*/|//[^\n]*", "", source[start:end], flags=re.DOTALL)
-        self.assertRegex(
-            walker,
-            r"CFTypeRef\s+childrenValue\s*=\s*CopyAttribute\(\s*current\s*,\s*"
-            r"kAXVisibleChildrenAttribute\s*\)\s*;",
+    @unittest.skipUnless(sys.platform == "darwin" and Path("/usr/bin/clang").exists(), "macOS AX helper")
+    def test_native_ax_selection_uses_supported_root_and_selected_tab(self) -> None:
+        self.assertTrue(NATIVE_AX_TEST.is_file(), "native AX selection harness is required")
+        executable_path = self.root / "native-ax-selection-test"
+        compile_result = subprocess.run(
+            [
+                "/usr/bin/clang",
+                "-fobjc-arc",
+                "-framework",
+                "AppKit",
+                "-framework",
+                "ApplicationServices",
+                "-framework",
+                "Foundation",
+                str(NATIVE_AX_TEST),
+                "-o",
+                str(executable_path),
+            ],
+            text=True,
+            capture_output=True,
         )
-        self.assertNotIn("kAXChildrenAttribute", walker)
+        self.assertEqual(compile_result.returncode, 0, compile_result.stderr)
+
+        result = subprocess.run([str(executable_path)], text=True, capture_output=True)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        snapshots = [json.loads(line) for line in result.stdout.splitlines() if line.strip()]
+        self.assertEqual(len(snapshots), 2, result.stderr)
+
+        def snapshot_page(snapshot: dict) -> tuple[str | None, str | None]:
+            nodes = snapshot["accessibility_tree"]["nodes"]
+            page = next((node for node in nodes if node.get("role") == "AXWebArea"), {})
+            link = next((node for node in nodes if node.get("role") == "AXLink"), {})
+            return page.get("title"), link.get("url")
+
+        self.assertEqual(
+            snapshot_page(snapshots[0]),
+            ("Selected page", "https://www.notion.so/selected-page-id"),
+        )
+        self.assertEqual(
+            snapshot_page(snapshots[1]),
+            (
+                "Selected child",
+                "https://app.notion.com/p/example/89abcdef0123456789abcdef01234567?pvs=23",
+            ),
+        )
 
     def test_side_peek_fragment_is_removed_from_direct_child_link(self) -> None:
         snapshot = self.ax_snapshot(
