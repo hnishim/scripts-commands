@@ -191,6 +191,38 @@ sys.exit(int(os.environ.get("FAKE_WRITER_EXIT", "0")))
         self.assertEqual(payload["plain"], "[Main database page](" + URL_MAIN + ")")
         self.assertEqual(payload["html"], '<a href="' + URL_MAIN + '">Main database page</a>')
 
+    def test_normal_page_strips_accessibility_main_fragment_and_preserves_query(self) -> None:
+        cases = [
+            (URL_MAIN + "#main", URL_MAIN, "without query"),
+            (URL_APP + "#main", URL_APP, "with query"),
+        ]
+        for raw_url, expected_url, label in cases:
+            with self.subTest(url_shape=label):
+                self.writer_log.unlink(missing_ok=True)
+                snapshot = self.ax_snapshot(
+                    "main",
+                    main_title="Canonical normal page",
+                    main_links=[raw_url],
+                )
+                result = self.run_command(snapshot)
+                self.assertEqual(
+                    self.writer_log.exists(),
+                    result.returncode == 0,
+                    "the writer must run only when page resolution succeeds",
+                )
+                self.assertEqual(result.returncode, 0, result.stderr)
+                payload = self.writer_payload()
+                self.assertEqual(payload["title"], "Canonical normal page")
+                self.assertEqual(payload["url"], expected_url)
+                self.assertEqual(
+                    payload["plain"],
+                    f"[Canonical normal page]({expected_url})",
+                )
+                self.assertEqual(
+                    payload["html"],
+                    f'<a href="{expected_url}">Canonical normal page</a>',
+                )
+
     @unittest.skipUnless(sys.platform == "darwin" and Path("/usr/bin/clang").exists(), "macOS AX helper")
     def test_native_ax_selection_uses_supported_root_and_selected_tab(self) -> None:
         self.assertTrue(NATIVE_AX_TEST.is_file(), "native AX selection harness is required")
