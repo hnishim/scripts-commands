@@ -137,16 +137,27 @@ def side_peek_child_url(raw_url):
         raise ValueError("invalid Side Peek link host")
 
     segments = parsed.path.split("/")
-    if (len(segments) != 4 or segments[0] != "" or segments[1] != "p"
-            or not segments[2] or not segments[3]):
+    if len(segments) == 3 and segments[0] == "" and segments[1] == "p" and segments[2]:
+        workspace_segment = None
+        page_token_segment = segments[2]
+    elif (len(segments) == 4 and segments[0] == "" and segments[1] == "p"
+            and segments[2] and segments[3]):
+        workspace_segment = segments[2]
+        page_token_segment = segments[3]
+    else:
         raise ValueError("invalid Side Peek link path")
-    workspace = unquote(segments[2])
-    page_token = unquote(segments[3])
-    if (not workspace or not page_token
-            or any(char in workspace + page_token for char in "/\\")
-            or workspace in {".", ".."} or page_token in {".", ".."}
-            or any(ord(char) < 32 or ord(char) == 127 for char in workspace + page_token)):
-        raise ValueError("invalid Notion workspace segment")
+
+    workspace = unquote(workspace_segment) if workspace_segment is not None else None
+    page_token = unquote(page_token_segment)
+    decoded_segments = [page_token] if workspace is None else [workspace, page_token]
+    if any(
+        not segment
+        or any(char in segment for char in "/\\")
+        or segment in {".", ".."}
+        or any(ord(char) < 32 or ord(char) == 127 for char in segment)
+        for segment in decoded_segments
+    ):
+        raise ValueError("invalid Notion URL segment")
 
     if re.fullmatch(r"[0-9a-fA-F]{32}", page_token):
         child_id = page_token
@@ -156,7 +167,11 @@ def side_peek_child_url(raw_url):
             raise ValueError("invalid Side Peek child page token")
         child_id = match.group(1)
 
-    direct_path = f"/p/{segments[2]}/{child_id}"
+    direct_path = (
+        f"/p/{child_id}"
+        if workspace_segment is None
+        else f"/p/{workspace_segment}/{child_id}"
+    )
     return urlunsplit(("https", "app.notion.com", direct_path, "", ""))
 
 def resolve_side_peek_page(scope_id, nodes):
