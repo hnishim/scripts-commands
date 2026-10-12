@@ -24,6 +24,7 @@ URL_APP = "https://app.notion.com/p/example/0123456789abcdef0123456789abcdef?sou
 PARENT_PAGE_ID = "0123456789abcdef0123456789abcdef"
 SIDE_CHILD_ID = "89abcdef0123456789abcdef01234567"
 SIDE_PEEK_CHILD_URL = f"https://app.notion.com/p/example/{SIDE_CHILD_ID}?pvs=23"
+SIDE_PEEK_SHORT_CHILD_URL = f"https://app.notion.com/p/{SIDE_CHILD_ID}?source=copy_link"
 SIDE_PEEK_COPY_LINK_URL = (
     f"https://app.notion.com/p/example/{SIDE_CHILD_ID}"
     "?v=abcdef0123456789abcdef0123456789&source=copy_link"
@@ -33,6 +34,7 @@ SIDE_PEEK_OUTER_URL = (
     f"?p={PARENT_PAGE_ID}&v=abcdef0123456789abcdef0123456789&pm=s"
 )
 DIRECT_CHILD_URL = f"https://app.notion.com/p/example/{SIDE_CHILD_ID}"
+DIRECT_SHORT_CHILD_URL = f"https://app.notion.com/p/{SIDE_CHILD_ID}"
 
 
 def executable(path: Path, body: str) -> None:
@@ -180,6 +182,34 @@ sys.exit(int(os.environ.get("FAKE_WRITER_EXIT", "0")))
                 self.assertEqual(
                     payload["html"],
                     '<a href="' + DIRECT_CHILD_URL + '">Side &amp; &quot;Peek&quot;</a>',
+                )
+
+    def test_short_side_peek_path_selects_child_and_formats_link(self) -> None:
+        raw_url = SIDE_PEEK_SHORT_CHILD_URL + "#child-block"
+        scenarios = [
+            ("main page focused", "main"),
+            ("Side Peek focused", "side"),
+        ]
+        for label, focused_pane in scenarios:
+            with self.subTest(focus=label):
+                snapshot = self.ax_snapshot(
+                    focused_pane,
+                    side_peek_open=True,
+                    side_links=[raw_url],
+                    outer_url=SIDE_PEEK_OUTER_URL,
+                )
+                result = self.run_command(snapshot)
+                self.assertEqual(result.returncode, 0, result.stderr)
+                payload = self.writer_payload()
+                self.assertEqual(payload["title"], 'Side & "Peek"')
+                self.assertEqual(payload["url"], DIRECT_SHORT_CHILD_URL)
+                self.assertEqual(
+                    payload["plain"],
+                    '[Side & "Peek"](' + DIRECT_SHORT_CHILD_URL + ")",
+                )
+                self.assertEqual(
+                    payload["html"],
+                    '<a href="' + DIRECT_SHORT_CHILD_URL + '">Side &amp; &quot;Peek&quot;</a>',
                 )
 
     def test_normal_page_without_side_peek_keeps_its_own_title_and_url(self) -> None:
@@ -440,6 +470,24 @@ sys.exit(int(os.environ.get("FAKE_WRITER_EXIT", "0")))
         for label, snapshot in cases:
             with self.subTest(case=label):
                 self.writer_log.unlink(missing_ok=True)
+                result = self.run_command(snapshot)
+                self.assertNotEqual(result.returncode, 0)
+                self.assertFalse(self.writer_log.exists())
+
+    def test_short_side_peek_path_rejects_invalid_id_and_extra_segments(self) -> None:
+        invalid_urls = [
+            "https://app.notion.com/p/?source=copy_link",
+            "https://app.notion.com/p/not-a-page-id?source=copy_link",
+            f"https://app.notion.com/p/{SIDE_CHILD_ID}/extra?source=copy_link",
+            f"https://app.notion.com/p/%2F{SIDE_CHILD_ID}?source=copy_link",
+            f"https://app.notion.com/p/{SIDE_CHILD_ID}%2Fextra?source=copy_link",
+        ]
+        for url in invalid_urls:
+            with self.subTest(url=url):
+                self.writer_log.unlink(missing_ok=True)
+                snapshot = self.ax_snapshot(
+                    "main", side_peek_open=True, side_links=[url]
+                )
                 result = self.run_command(snapshot)
                 self.assertNotEqual(result.returncode, 0)
                 self.assertFalse(self.writer_log.exists())
